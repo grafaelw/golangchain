@@ -1,0 +1,225 @@
+// Package embeddings defines the Embedder interface and provides OpenAI and
+// Azure OpenAI implementations for generating vector embeddings from text.
+package embeddings
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	goopenai "github.com/sashabaranov/go-openai"
+)
+
+// ---------------------------------------------------------------------------
+// Embedder interface
+// ---------------------------------------------------------------------------
+
+// Embedder generates dense vector embeddings from text. Implementations are
+// used by VectorStore to index documents and encode queries.
+type Embedder interface {
+	// EmbedDocuments generates embeddings for a batch of documents.
+	// Returns one []float64 per document, in the same order.
+	EmbedDocuments(ctx context.Context, texts []string) ([][]float64, error)
+
+	// EmbedQuery generates an embedding for a single query string.
+	// May use a different model instruction than EmbedDocuments.
+	EmbedQuery(ctx context.Context, text string) ([]float64, error)
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Embedder
+// ---------------------------------------------------------------------------
+
+// OpenAIEmbedder uses OpenAI's text-embedding models.
+type OpenAIEmbedder struct {
+	client    *goopenai.Client
+	model     string
+	batchSize int
+}
+
+// OpenAIEmbedderOption configures an OpenAIEmbedder.
+type OpenAIEmbedderOption func(*OpenAIEmbedder)
+
+func WithModel(model string) OpenAIEmbedderOption {
+	return func(e *OpenAIEmbedder) { e.model = model }
+}
+func WithBatchSize(n int) OpenAIEmbedderOption {
+	return func(e *OpenAIEmbedder) { e.batchSize = n }
+}
+
+// NewOpenAIEmbedder creates an OpenAI embedding client.
+//
+//	emb, err := embeddings.NewOpenAIEmbedder(
+//	    os.Getenv("OPENAI_API_KEY"),
+//	    embeddings.WithModel("text-embedding-3-small"),
+//	)
+func NewOpenAIEmbedder(apiKey string, opts ...OpenAIEmbedderOption) (*OpenAIEmbedder, error) {
+	if apiKey == "" {
+		return nil, errors.New("embeddings: OpenAI API key is required")
+	}
+	e := &OpenAIEmbedder{
+		client:    goopenai.NewClient(apiKey),
+		model:     "text-embedding-3-small",
+		batchSize: 512,
+	}
+	for _, o := range opts {
+		o(e)
+	}
+	return e, nil
+}
+
+// EmbedDocuments embeds a batch of texts, batching requests to stay within
+// API limits.
+func (e *OpenAIEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([][]float64, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	all := make([][]float64, 0, len(texts))
+	for i := 0; i < len(texts); i += e.batchSize {
+		end := i + e.batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batch := texts[i:end]
+		embeddings, err := e.embed(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, embeddings...)
+	}
+	return all, nil
+}
+
+// EmbedQuery embeds a single query string.
+func (e *OpenAIEmbedder) EmbedQuery(ctx context.Context, text string) ([]float64, error) {
+	results, err := e.embed(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, errors.New("embeddings: empty result from OpenAI")
+	}
+	return results[0], nil
+}
+
+func (e *OpenAIEmbedder) embed(ctx context.Context, texts []string) ([][]float64, error) {
+	req := goopenai.EmbeddingRequest{
+		Input: texts,
+		Model: goopenai.EmbeddingModel(e.model),
+	}
+	resp, err := e.client.CreateEmbeddings(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("embeddings: openai: %w", err)
+	}
+	out := make([][]float64, len(resp.Data))
+	for i, d := range resp.Data {
+		v := make([]float64, len(d.Embedding))
+		for j, f := range d.Embedding {
+			v[j] = float64(f)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Azure OpenAI Embedder
+// ---------------------------------------------------------------------------
+
+// AzureEmbedder uses Azure OpenAI's embedding deployment.
+type AzureEmbedder struct {
+	client     *goopenai.Client
+	deployment string
+	batchSize  int
+}
+
+// AzureEmbedderOption configures an AzureEmbedder.
+type AzureEmbedderOption func(*AzureEmbedder)
+
+func WithAzureBatchSize(n int) AzureEmbedderOption {
+	return func(e *AzureEmbedder) { e.batchSize = n }
+}
+
+// NewAzureEmbedder creates an Azure OpenAI embedding client.
+//
+//	emb, err := embeddings.NewAzureEmbedder(
+//	    os.Getenv("AZURE_OPENAI_API_KEY"),
+//	    os.Getenv("AZURE_OPENAI_ENDPOINT"),
+//	    "text-embedding-3-small",  // deployment name
+//	    "2024-02-01",              // API version
+//	)
+func NewAzureEmbedder(apiKey, endpoint, deployment, apiVersion string, opts ...AzureEmbedderOption) (*AzureEmbedder, error) {
+	if apiKey == "" {
+		return nil, errors.New("embeddings: Azure API key is required")
+	}
+	if endpoint == "" {
+		return nil, errors.New("embeddings: Azure endpoint is required")
+	}
+	if deployment == "" {
+		return nil, errors.New("embeddings: Azure deployment is required")
+	}
+
+	cfg := goopenai.DefaultAzureConfig(apiKey, endpoint)
+	cfg.APIVersion = apiVersion
+
+	e := &AzureEmbedder{
+		client:     goopenai.NewClientWithConfig(cfg),
+		deployment: deployment,
+		batchSize:  512,
+	}
+	for _, o := range opts {
+		o(e)
+	}
+	return e, nil
+}
+
+func (e *AzureEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([][]float64, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	all := make([][]float64, 0, len(texts))
+	for i := 0; i < len(texts); i += e.batchSize {
+		end := i + e.batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batch := texts[i:end]
+		embeddings, err := e.embed(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, embeddings...)
+	}
+	return all, nil
+}
+
+func (e *AzureEmbedder) EmbedQuery(ctx context.Context, text string) ([]float64, error) {
+	results, err := e.embed(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, errors.New("embeddings: empty result from Azure")
+	}
+	return results[0], nil
+}
+
+func (e *AzureEmbedder) embed(ctx context.Context, texts []string) ([][]float64, error) {
+	req := goopenai.EmbeddingRequest{
+		Input: texts,
+		Model: goopenai.EmbeddingModel(e.deployment),
+	}
+	resp, err := e.client.CreateEmbeddings(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("embeddings: azure: %w", err)
+	}
+	out := make([][]float64, len(resp.Data))
+	for i, d := range resp.Data {
+		v := make([]float64, len(d.Embedding))
+		for j, f := range d.Embedding {
+			v[j] = float64(f)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
