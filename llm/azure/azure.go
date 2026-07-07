@@ -33,11 +33,11 @@ type config struct {
 // ProviderOption configures the Azure OpenAI provider.
 type ProviderOption func(*config)
 
-func WithAPIKey(key string) ProviderOption     { return func(c *config) { c.apiKey = key } }
-func WithEndpoint(ep string) ProviderOption    { return func(c *config) { c.endpoint = ep } }
-func WithDeployment(d string) ProviderOption   { return func(c *config) { c.deployment = d } }
-func WithAPIVersion(v string) ProviderOption   { return func(c *config) { c.apiVersion = v } }
-func WithEntraToken(t string) ProviderOption   { return func(c *config) { c.entraToken = t } }
+func WithAPIKey(key string) ProviderOption   { return func(c *config) { c.apiKey = key } }
+func WithEndpoint(ep string) ProviderOption  { return func(c *config) { c.endpoint = ep } }
+func WithDeployment(d string) ProviderOption { return func(c *config) { c.deployment = d } }
+func WithAPIVersion(v string) ProviderOption { return func(c *config) { c.apiVersion = v } }
+func WithEntraToken(t string) ProviderOption { return func(c *config) { c.entraToken = t } }
 
 // ---------------------------------------------------------------------------
 // LLM
@@ -132,7 +132,7 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 	ch := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(ch)
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 
 		for stream.Next() {
 			chunk := stream.Current()

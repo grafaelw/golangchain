@@ -15,9 +15,9 @@ import (
 // ---------------------------------------------------------------------------
 
 type testState struct {
-	Count   int
-	Log     []string
-	Next    string
+	Count int
+	Log   []string
+	Next  string
 }
 
 func reducer(cur, upd testState) testState {

@@ -92,10 +92,10 @@ const (
 
 type edge[S any] struct {
 	kind      edgeKind
-	to        string              // for unconditional
-	condition ConditionFunc[S]    // for conditional
-	mapping   map[string]string   // for conditional: route key → node name
-	branches  []string            // for parallel
+	to        string            // for unconditional
+	condition ConditionFunc[S]  // for conditional
+	mapping   map[string]string // for conditional: route key → node name
+	branches  []string          // for parallel
 }
 
 // ---------------------------------------------------------------------------
@@ -354,10 +354,10 @@ const (
 
 // GraphEvent is a single event emitted during a streaming graph run.
 type GraphEvent[S any] struct {
-	Type     GraphEventType
-	Node     string
-	State    S     // state after node execution (for NodeEnd, Checkpoint, End)
-	Err      error // for Error events
+	Type  GraphEventType
+	Node  string
+	State S     // state after node execution (for NodeEnd, Checkpoint, End)
+	Err   error // for Error events
 }
 
 // ---------------------------------------------------------------------------
@@ -466,49 +466,49 @@ func (c *CompiledGraph[S]) stream(ctx context.Context, input S, rc *runConfig[S]
 				return
 			}
 
-		// Execute node
-		fn, ok := c.nodes[nodeName]
-		if !ok {
-			ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: unknown node %q", nodeName)}
-			return
-		}
-
-		// Inject a node-level run ID. Passing nodeCtx to fn() lets any
-		// callbacks fired inside the node (e.g. LLM calls) reference this
-		// node run as their parent.
-		nodeCtx := callbacks.WithRunID(ctx, callbacks.NewRunID())
-		if c.cfg.callbacks != nil {
-			c.cfg.callbacks.OnGraphNodeStart(nodeCtx, c.name, nodeName)
-		}
-		ch <- GraphEvent[S]{Type: GraphEventNodeStart, Node: nodeName, State: state}
-
-		update, err := fn(nodeCtx, state)
-		steps++
-
-		// Human-in-the-loop interrupt
-		if interrupt, ok := err.(*Interrupt); ok {
-			// Save state so the run can be resumed
-			state = c.reducer(state, update)
-			c.saveCheckpoint(ctx, rc, state, ch)
-			ch <- GraphEvent[S]{Type: GraphEventError, Err: interrupt}
-			return
-		}
-
-		if err != nil {
-			if c.cfg.callbacks != nil {
-				c.cfg.callbacks.OnError(nodeCtx, nodeName, err)
+			// Execute node
+			fn, ok := c.nodes[nodeName]
+			if !ok {
+				ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: unknown node %q", nodeName)}
+				return
 			}
-			ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: node %q: %w", nodeName, err)}
-			return
-		}
 
-		// Merge update into state
-		state = c.reducer(state, update)
+			// Inject a node-level run ID. Passing nodeCtx to fn() lets any
+			// callbacks fired inside the node (e.g. LLM calls) reference this
+			// node run as their parent.
+			nodeCtx := callbacks.WithRunID(ctx, callbacks.NewRunID())
+			if c.cfg.callbacks != nil {
+				c.cfg.callbacks.OnGraphNodeStart(nodeCtx, c.name, nodeName)
+			}
+			ch <- GraphEvent[S]{Type: GraphEventNodeStart, Node: nodeName, State: state}
 
-		if c.cfg.callbacks != nil {
-			c.cfg.callbacks.OnGraphNodeEnd(nodeCtx, c.name, nodeName)
-		}
-		ch <- GraphEvent[S]{Type: GraphEventNodeEnd, Node: nodeName, State: state}
+			update, err := fn(nodeCtx, state)
+			steps++
+
+			// Human-in-the-loop interrupt
+			if interrupt, ok := err.(*Interrupt); ok {
+				// Save state so the run can be resumed
+				state = c.reducer(state, update)
+				c.saveCheckpoint(ctx, rc, state, ch)
+				ch <- GraphEvent[S]{Type: GraphEventError, Err: interrupt}
+				return
+			}
+
+			if err != nil {
+				if c.cfg.callbacks != nil {
+					c.cfg.callbacks.OnError(nodeCtx, nodeName, err)
+				}
+				ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: node %q: %w", nodeName, err)}
+				return
+			}
+
+			// Merge update into state
+			state = c.reducer(state, update)
+
+			if c.cfg.callbacks != nil {
+				c.cfg.callbacks.OnGraphNodeEnd(nodeCtx, c.name, nodeName)
+			}
+			ch <- GraphEvent[S]{Type: GraphEventNodeEnd, Node: nodeName, State: state}
 
 			// Checkpoint after each node if configured
 			c.saveCheckpoint(ctx, rc, state, ch)

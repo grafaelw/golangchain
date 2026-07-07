@@ -30,9 +30,9 @@ type config struct {
 // ProviderOption configures the OpenAI-compatible provider.
 type ProviderOption func(*config)
 
-func WithBaseURL(url string) ProviderOption  { return func(c *config) { c.baseURL = url } }
-func WithAPIKey(key string) ProviderOption   { return func(c *config) { c.apiKey = key } }
-func WithModel(model string) ProviderOption  { return func(c *config) { c.model = model } }
+func WithBaseURL(url string) ProviderOption { return func(c *config) { c.baseURL = url } }
+func WithAPIKey(key string) ProviderOption  { return func(c *config) { c.apiKey = key } }
+func WithModel(model string) ProviderOption { return func(c *config) { c.model = model } }
 
 // ---------------------------------------------------------------------------
 // LLM

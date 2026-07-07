@@ -55,9 +55,9 @@ type mockTool struct {
 	calls  int
 }
 
-func (t *mockTool) Name() string                    { return t.name }
-func (t *mockTool) Description() string             { return "mock tool: " + t.name }
-func (t *mockTool) Schema() json.RawMessage         { return json.RawMessage(`{"type":"object"}`) }
+func (t *mockTool) Name() string            { return t.name }
+func (t *mockTool) Description() string     { return "mock tool: " + t.name }
+func (t *mockTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (t *mockTool) Run(_ context.Context, _ string) (string, error) {
 	t.calls++
 	return t.output, nil

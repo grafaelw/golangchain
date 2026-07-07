@@ -127,8 +127,8 @@ func (f *FuncRunnable) Pipe(next Runnable) Runnable {
 // LLMRunnable adapts an llm.LLM so it can participate in a Pipe chain.
 // Input must be []schema.Message; output is *schema.Generation.
 type LLMRunnable struct {
-	LLM      llm.LLM
-	Opts     []llm.Option
+	LLM       llm.LLM
+	Opts      []llm.Option
 	Callbacks *callbacks.CallbackManager
 }
 
@@ -455,7 +455,7 @@ func (s *SequentialChain) Pipe(next Runnable) Runnable {
 // MapChain fans input out to multiple Runnables in parallel and collects
 // their outputs into a map[string]any keyed by the supplied names.
 type MapChain struct {
-	name    string
+	name     string
 	branches map[string]Runnable
 }
 
@@ -588,7 +588,9 @@ type PromptTemplateFormatter struct {
 }
 
 // NewPromptTemplateFormatter wraps a *prompt.PromptTemplate as a Formatter.
-func NewPromptTemplateFormatter(t interface{ Format(map[string]any) (string, error) }) *PromptTemplateFormatter {
+func NewPromptTemplateFormatter(t interface {
+	Format(map[string]any) (string, error)
+}) *PromptTemplateFormatter {
 	return &PromptTemplateFormatter{template: t}
 }
 

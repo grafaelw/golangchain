@@ -58,7 +58,7 @@ func (JSONOutputParser) FormatInstructions() string {
 // StructOutputParser — parses into a typed struct via JSON
 // ---------------------------------------------------------------------------
 
-// StructOutputParser[T] unmarshals LLM output JSON into a strongly-typed
+// StructOutputParser unmarshals LLM output JSON into a strongly-typed
 // Go struct T.
 //
 //	type Reply struct {
@@ -165,13 +165,11 @@ func (BoolOutputParser) FormatInstructions() string {
 // RegexParser — extracts a named capture group from the text
 // ---------------------------------------------------------------------------
 
-
-
 // ---------------------------------------------------------------------------
 // AnyParser — adapts a typed Parser[T] to the chain.OutputParser interface
 // ---------------------------------------------------------------------------
 
-// AnyParser wraps a Parser[T] so it implements interface{ Parse(string) (any, error) },
+// AsAny wraps a Parser[T] so it implements interface{ Parse(string) (any, error) },
 // which is what chain.NewLLMChain expects.
 //
 //	chain.NewLLMChain(prompt, model, output.AsAny(output.StrOutputParser{}))

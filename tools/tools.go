@@ -77,8 +77,10 @@ func FindTool(tools []Tool, name string) Tool {
 // Output: "22".
 type Calculator struct{}
 
-func (Calculator) Name() string        { return "calculator" }
-func (Calculator) Description() string { return "Evaluates a mathematical expression. Input should be a valid math expression string, e.g. '2 + 2 * 10' or 'sqrt(144)'." }
+func (Calculator) Name() string { return "calculator" }
+func (Calculator) Description() string {
+	return "Evaluates a mathematical expression. Input should be a valid math expression string, e.g. '2 + 2 * 10' or 'sqrt(144)'."
+}
 func (Calculator) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
@@ -114,9 +116,9 @@ func (Calculator) Run(_ context.Context, input string) (string, error) {
 //
 // Input:  "https://example.com" (plain URL or JSON {"url":"..."}).
 type HTTPFetch struct {
-	Client     *http.Client
-	MaxBytes   int64
-	UserAgent  string
+	Client    *http.Client
+	MaxBytes  int64
+	UserAgent string
 }
 
 // NewHTTPFetch creates an HTTPFetch with sensible defaults.
@@ -128,8 +130,10 @@ func NewHTTPFetch() *HTTPFetch {
 	}
 }
 
-func (h *HTTPFetch) Name() string        { return "http_fetch" }
-func (h *HTTPFetch) Description() string { return "Fetches the content of a URL via HTTP GET. Input: a URL string or JSON {\"url\":\"...\"}. Returns the response body (truncated at 1 MiB)." }
+func (h *HTTPFetch) Name() string { return "http_fetch" }
+func (h *HTTPFetch) Description() string {
+	return "Fetches the content of a URL via HTTP GET. Input: a URL string or JSON {\"url\":\"...\"}. Returns the response body (truncated at 1 MiB)."
+}
 func (h *HTTPFetch) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
@@ -189,8 +193,10 @@ func NewDuckDuckGoSearch() *DuckDuckGoSearch {
 	return &DuckDuckGoSearch{Client: &http.Client{Timeout: 10 * time.Second}}
 }
 
-func (d *DuckDuckGoSearch) Name() string        { return "duckduckgo_search" }
-func (d *DuckDuckGoSearch) Description() string { return "Searches the web using DuckDuckGo and returns a brief answer or abstract. Best for factual questions. Input: the search query string." }
+func (d *DuckDuckGoSearch) Name() string { return "duckduckgo_search" }
+func (d *DuckDuckGoSearch) Description() string {
+	return "Searches the web using DuckDuckGo and returns a brief answer or abstract. Best for factual questions. Input: the search query string."
+}
 func (d *DuckDuckGoSearch) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
@@ -267,15 +273,17 @@ func (d *DuckDuckGoSearch) Run(ctx context.Context, input string) (string, error
 // potentially dangerous tool. Only add it to an agent when explicitly required
 // and running in a sandboxed environment.
 //
-// Input: the shell command string or JSON {"command":"..."}
+// Input: the shell command string or JSON {"command":"..."}.
 type ShellTool struct {
 	// AllowedCommands is an optional whitelist. If non-nil, only commands
 	// whose executable matches one of these names are allowed.
 	AllowedCommands []string
 }
 
-func (s *ShellTool) Name() string        { return "shell" }
-func (s *ShellTool) Description() string { return "Executes a shell command and returns stdout. Use only for system operations. Input: the command to run (string)." }
+func (s *ShellTool) Name() string { return "shell" }
+func (s *ShellTool) Description() string {
+	return "Executes a shell command and returns stdout. Use only for system operations. Input: the command to run (string)."
+}
 func (s *ShellTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
@@ -335,9 +343,9 @@ func NewFuncTool(
 	return &FuncTool{name: name, description: description, schema: schema, fn: fn}
 }
 
-func (f *FuncTool) Name() string               { return f.name }
-func (f *FuncTool) Description() string        { return f.description }
-func (f *FuncTool) Schema() json.RawMessage    { return f.schema }
+func (f *FuncTool) Name() string            { return f.name }
+func (f *FuncTool) Description() string     { return f.description }
+func (f *FuncTool) Schema() json.RawMessage { return f.schema }
 func (f *FuncTool) Run(ctx context.Context, input string) (string, error) {
 	return f.fn(ctx, input)
 }

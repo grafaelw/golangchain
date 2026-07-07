@@ -43,11 +43,11 @@ const (
 // Inspect Type to determine which fields are populated.
 type AgentEvent struct {
 	Type        EventType
-	Thought     string            // EventThought
+	Thought     string             // EventThought
 	Action      schema.AgentAction // EventToolCall
-	Observation string            // EventToolResult
-	Answer      string            // EventFinalAnswer
-	Err         error             // EventError
+	Observation string             // EventToolResult
+	Answer      string             // EventFinalAnswer
+	Err         error              // EventError
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ type Agent interface {
 type AgentExecutor struct {
 	Agent     Agent
 	Tools     []tools.Tool
-	Memory    memory.Memory          // optional; injects history into prompts
+	Memory    memory.Memory // optional; injects history into prompts
 	Callbacks *callbacks.CallbackManager
 	MaxIter   int  // default: 10
 	Verbose   bool // if true, prints thoughts/actions to stdout
@@ -249,10 +249,10 @@ func (e *AgentExecutor) runTool(ctx context.Context, action schema.AgentAction) 
 // ToolCallingAgent uses the model's native function/tool-calling capability.
 // Works with OpenAI GPT-4o, Anthropic Claude 3, and Google Gemini 1.5+.
 type ToolCallingAgent struct {
-	llm         llm.LLM
-	llmOpts     []llm.Option
+	llm          llm.LLM
+	llmOpts      []llm.Option
 	systemPrompt string
-	tools       []tools.Tool
+	tools        []tools.Tool
 }
 
 // NewToolCallingAgent constructs a ToolCallingAgent.

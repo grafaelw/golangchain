@@ -46,9 +46,9 @@ type VectorStore interface {
 
 // entry holds a document alongside its embedding vector and an optional ID.
 type entry struct {
-	id       string
-	doc      schema.Document
-	vector   []float64
+	id     string
+	doc    schema.Document
+	vector []float64
 }
 
 // InMemoryVectorStore is a VectorStore backed by a slice of entries searched
@@ -58,8 +58,8 @@ type entry struct {
 //	_ = store.AddDocuments(ctx, docs)
 //	results, _ := store.SimilaritySearch(ctx, "my query", 5)
 type InMemoryVectorStore struct {
-	mu      sync.RWMutex
-	entries []entry
+	mu       sync.RWMutex
+	entries  []entry
 	embedder embeddings.Embedder
 }
 
@@ -214,8 +214,8 @@ func NewRetrieverTool(store VectorStore, k int, name, description string) *Retri
 	return &RetrieverTool{store: store, k: k, name: name, desc: description}
 }
 
-func (r *RetrieverTool) Name() string               { return r.name }
-func (r *RetrieverTool) Description() string        { return r.desc }
+func (r *RetrieverTool) Name() string        { return r.name }
+func (r *RetrieverTool) Description() string { return r.desc }
 func (r *RetrieverTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`)
 }
@@ -234,5 +234,3 @@ func (r *RetrieverTool) Run(ctx context.Context, input string) (string, error) {
 	}
 	return sb.String(), nil
 }
-
-

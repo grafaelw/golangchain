@@ -13,7 +13,7 @@
 // # Built-in tools
 //
 //   - [Calculator]       — evaluates arithmetic expressions using a recursive-descent parser;
-//                          supports +, -, *, /, ^ and functions sqrt, abs, floor, ceil, round
+//     supports +, -, *, /, ^ and functions sqrt, abs, floor, ceil, round
 //   - [HTTPFetch]        — HTTP GET a URL, returns the response body as a string
 //   - [DuckDuckGoSearch] — queries the DuckDuckGo Instant Answer API (no API key required)
 //   - [ShellTool]        — executes shell commands (use in sandboxed environments only)

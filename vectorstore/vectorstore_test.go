@@ -116,9 +116,9 @@ func TestSimilaritySearch_TopK(t *testing.T) {
 	e := newFakeEmbedder(dim)
 
 	// Three orthogonal documents; query matches doc0
-	e.set("doc0", unitVec(dim, 0)) // [1,0,0,0]
-	e.set("doc1", unitVec(dim, 1)) // [0,1,0,0]
-	e.set("doc2", unitVec(dim, 2)) // [0,0,1,0]
+	e.set("doc0", unitVec(dim, 0))  // [1,0,0,0]
+	e.set("doc1", unitVec(dim, 1))  // [0,1,0,0]
+	e.set("doc2", unitVec(dim, 2))  // [0,0,1,0]
 	e.set("query", unitVec(dim, 0)) // identical to doc0
 
 	store := vectorstore.NewInMemoryVectorStore(e)
