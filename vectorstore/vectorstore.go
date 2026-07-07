@@ -230,7 +230,7 @@ func (r *RetrieverTool) Run(ctx context.Context, input string) (string, error) {
 	}
 	var sb strings.Builder
 	for i, doc := range docs {
-		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, doc.PageContent))
+		fmt.Fprintf(&sb, "[%d] %s\n", i+1, doc.PageContent)
 	}
 	return sb.String(), nil
 }

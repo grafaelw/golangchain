@@ -144,11 +144,12 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 		for stream.Next() {
 			event := stream.Current()
 			// event.Type is a string: "content_block_delta", "message_stop", etc.
-			if event.Type == "content_block_delta" {
+			switch event.Type {
+			case "content_block_delta":
 				if event.Delta.Type == "text_delta" {
 					ch <- schema.StreamChunk{Text: event.Delta.Text}
 				}
-			} else if event.Type == "message_stop" {
+			case "message_stop":
 				ch <- schema.StreamChunk{Done: true}
 				return
 			}

@@ -74,7 +74,7 @@ func FindTool(tools []Tool, name string) Tool {
 // sqrt, abs, floor, ceil, round.
 //
 // Input:  "2 + 2 * 10"
-// Output: "22"
+// Output: "22".
 type Calculator struct{}
 
 func (Calculator) Name() string        { return "calculator" }
@@ -112,7 +112,7 @@ func (Calculator) Run(_ context.Context, input string) (string, error) {
 // HTTPFetch performs an HTTP GET and returns the response body as a string.
 // HTML is returned as-is; callers can post-process with an LLM.
 //
-// Input:  "https://example.com" (plain URL or JSON {"url":"..."})
+// Input:  "https://example.com" (plain URL or JSON {"url":"..."}).
 type HTTPFetch struct {
 	Client     *http.Client
 	MaxBytes   int64
@@ -163,7 +163,7 @@ func (h *HTTPFetch) Run(ctx context.Context, input string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("http_fetch: request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, h.MaxBytes))
 	if err != nil {
@@ -179,7 +179,7 @@ func (h *HTTPFetch) Run(ctx context.Context, input string) (string, error) {
 // DuckDuckGoSearch queries the DuckDuckGo Instant Answer API.
 // It requires no API key and is suitable for lightweight factual queries.
 //
-// Input:  "capital of France" or JSON {"query":"..."}
+// Input:  "capital of France" or JSON {"query":"..."}.
 type DuckDuckGoSearch struct {
 	Client *http.Client
 }
@@ -222,7 +222,7 @@ func (d *DuckDuckGoSearch) Run(ctx context.Context, input string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("duckduckgo: request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Abstract       string `json:"Abstract"`

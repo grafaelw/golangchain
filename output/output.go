@@ -165,16 +165,7 @@ func (BoolOutputParser) FormatInstructions() string {
 // RegexParser — extracts a named capture group from the text
 // ---------------------------------------------------------------------------
 
-// RegexParser uses a regular expression to extract a substring from the
-// LLM output. The pattern must include exactly one named capture group.
-//
-//	parser, _ := output.NewRegexParser(`Answer:\s*(?P<answer>.+)`, "answer")
-//	answer, err := parser.Parse(llmText)
-type RegexParser struct {
-	pattern string
-	group   string
-	re      interface{ FindStringSubmatch(string) []string; SubexpNames() []string }
-}
+
 
 // ---------------------------------------------------------------------------
 // AnyParser — adapts a typed Parser[T] to the chain.OutputParser interface
@@ -208,9 +199,7 @@ func stripCodeFence(s string) string {
 		}
 	}
 	// Remove closing fence
-	if strings.HasSuffix(s, "```") {
-		s = s[:len(s)-3]
-	}
+	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
 }
 

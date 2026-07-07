@@ -48,12 +48,12 @@ type Memory interface {
 //	vars, _ := mem.LoadMemoryVariables(ctx)
 //	// vars["history"] is []schema.Message
 type ConversationBufferMemory struct {
-	mu           sync.RWMutex
-	messages     []schema.Message
-	HistoryKey   string // key used in LoadMemoryVariables (default: "history")
-	HumanPrefix  string // default: "Human"
-	AIPrefix     string // default: "AI"
-	ReturnMessages bool // if true, return []schema.Message; if false, return string
+	mu             sync.RWMutex
+	messages       []schema.Message
+	HistoryKey     string // key used in LoadMemoryVariables (default: "history")
+	HumanPrefix    string // default: "Human"
+	AIPrefix       string // default: "AI"
+	ReturnMessages bool   // if true, return []schema.Message; if false, return string
 }
 
 // NewConversationBufferMemory creates a ConversationBufferMemory with defaults.
@@ -123,10 +123,10 @@ func (m *ConversationBufferMemory) Clear(_ context.Context) error {
 //
 //	mem := memory.NewConversationWindowMemory(5) // keep last 5 turns
 type ConversationWindowMemory struct {
-	mu         sync.RWMutex
-	messages   []schema.Message
-	K          int    // number of turns to retain (1 turn = 1 human + 1 AI message)
-	HistoryKey string
+	mu             sync.RWMutex
+	messages       []schema.Message
+	K              int // number of turns to retain (1 turn = 1 human + 1 AI message)
+	HistoryKey     string
 	ReturnMessages bool
 }
 
@@ -202,7 +202,7 @@ type ConversationSummaryMemory struct {
 	llm        llm.LLM
 	summary    string
 	recent     []schema.Message
-	MaxRecent  int    // raw turns to keep before compressing (default 4)
+	MaxRecent  int // raw turns to keep before compressing (default 4)
 	HistoryKey string
 }
 

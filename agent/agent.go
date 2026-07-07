@@ -383,7 +383,7 @@ func buildReActSystemPrompt(agentTools []tools.Tool) string {
 Available tools:
 `)
 	for _, t := range agentTools {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name(), t.Description()))
+		fmt.Fprintf(&sb, "- %s: %s\n", t.Name(), t.Description())
 	}
 	sb.WriteString(`
 Use the following format strictly:

@@ -329,8 +329,6 @@ type RunOption[S any] func(*runConfig[S])
 
 type runConfig[S any] struct {
 	threadID string
-	// resumeFrom resumes from a saved checkpoint (human-in-the-loop)
-	resumeFrom *Checkpoint[S]
 }
 
 // WithThreadID associates a thread ID with this run for checkpointing.

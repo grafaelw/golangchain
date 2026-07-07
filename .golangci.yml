@@ -48,12 +48,13 @@ linters:
 
     revive:
       rules:
+        # exported requires doc comments on every exported symbol.
+        # Disabled because interface-implementation methods are self-documenting
+        # via the interface definition and individual comments add noise.
         - name: exported
-          arguments:
-            - "checkPrivateReceivers"
-            - "sayRepetitiveInsteadOfStutters"
+          disabled: true
         - name: unused-parameter
-          disabled: true   # too noisy in interface implementations
+          disabled: true
 
     staticcheck:
       checks:

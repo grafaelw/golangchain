@@ -12,11 +12,11 @@ import "encoding/json"
 type Role string
 
 const (
-	RoleSystem    Role = "system"
-	RoleHuman     Role = "human"
-	RoleAI        Role = "ai"
-	RoleTool      Role = "tool"
-	RoleFunction  Role = "function" // legacy OpenAI function role
+	RoleSystem   Role = "system"
+	RoleHuman    Role = "human"
+	RoleAI       Role = "ai"
+	RoleTool     Role = "tool"
+	RoleFunction Role = "function" // legacy OpenAI function role
 )
 
 // ---------------------------------------------------------------------------
@@ -27,8 +27,8 @@ const (
 type Message struct {
 	Role       Role       `json:"role"`
 	Content    string     `json:"content"`
-	Name       string     `json:"name,omitempty"`        // for tool/function messages
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`  // AI → tool call requests
+	Name       string     `json:"name,omitempty"`         // for tool/function messages
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // AI → tool call requests
 	ToolCallID string     `json:"tool_call_id,omitempty"` // tool result message
 }
 

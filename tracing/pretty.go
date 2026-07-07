@@ -116,6 +116,12 @@ func (h *PrettyHandler) depthOf(parentID string) int {
 	return 1
 }
 
+// write is a fire-and-forget helper; write errors to h.w are non-actionable
+// (e.g. a closed stderr) so the return value is intentionally discarded.
+func (h *PrettyHandler) write(format string, args ...any) {
+	_, _ = fmt.Fprintf(h.w, format, args...)
+}
+
 func (h *PrettyHandler) pad(depth int) string {
 	return strings.Repeat("  ", depth)
 }
@@ -186,7 +192,7 @@ func (h *PrettyHandler) OnLLMStart(ctx context.Context, model string, msgs []sch
 	p := h.pad(depth)
 	h.mu.Unlock()
 
-	fmt.Fprintf(h.w, "%s%s %s  %s\n",
+	h.write( "%s%s %s  %s\n",
 		p,
 		h.c(ansiBold+ansiBlue, "> LLM"),
 		h.c(ansiBlue, model),
@@ -217,7 +223,7 @@ func (h *PrettyHandler) OnLLMEnd(ctx context.Context, model string, gen *schema.
 		preview = h.c(ansiDim, fmt.Sprintf(`  "%s"`, truncate(gen.Text, 80)))
 	}
 
-	fmt.Fprintf(h.w, "%s%s %s  %s%s%s\n",
+	h.write( "%s%s %s  %s%s%s\n",
 		p,
 		h.c(ansiGreen, "✓ LLM"),
 		h.c(ansiBlue, model),
@@ -239,7 +245,7 @@ func (h *PrettyHandler) OnChainStart(ctx context.Context, name string, _ map[str
 	p := h.pad(depth)
 	h.mu.Unlock()
 
-	fmt.Fprintf(h.w, "%s%s %s\n",
+	h.write( "%s%s %s\n",
 		p,
 		h.c(ansiBold+ansiCyan, "> Chain"),
 		h.c(ansiCyan, name),
@@ -259,7 +265,7 @@ func (h *PrettyHandler) OnChainEnd(ctx context.Context, name string, _ map[strin
 	dur := time.Since(info.startTime)
 	p := h.pad(info.depth)
 
-	fmt.Fprintf(h.w, "%s%s %s  %s\n",
+	h.write( "%s%s %s  %s\n",
 		p,
 		h.c(ansiGreen, "✓ Chain"),
 		h.c(ansiCyan, name),
@@ -280,7 +286,7 @@ func (h *PrettyHandler) OnToolStart(ctx context.Context, name, input string) {
 	p := h.pad(depth)
 	h.mu.Unlock()
 
-	fmt.Fprintf(h.w, "%s%s %s  %s\n",
+	h.write( "%s%s %s  %s\n",
 		p,
 		h.c(ansiBold+ansiYellow, "> Tool"),
 		h.c(ansiYellow, name),
@@ -301,7 +307,7 @@ func (h *PrettyHandler) OnToolEnd(ctx context.Context, name, output string) {
 	dur := time.Since(info.startTime)
 	p := h.pad(info.depth)
 
-	fmt.Fprintf(h.w, "%s%s %s  %s  %s\n",
+	h.write( "%s%s %s  %s  %s\n",
 		p,
 		h.c(ansiGreen, "✓ Tool"),
 		h.c(ansiYellow, name),
@@ -322,7 +328,7 @@ func (h *PrettyHandler) OnAgentAction(ctx context.Context, action schema.AgentAc
 	h.mu.Unlock()
 
 	p := h.pad(depth)
-	fmt.Fprintf(h.w, "%s%s  %s(%s)\n",
+	h.write( "%s%s  %s(%s)\n",
 		p,
 		h.c(ansiBold+ansiGreen, "• Action"),
 		h.c(ansiYellow, action.Tool),
@@ -337,7 +343,7 @@ func (h *PrettyHandler) OnAgentFinish(ctx context.Context, finish schema.AgentFi
 	h.mu.Unlock()
 
 	p := h.pad(depth)
-	fmt.Fprintf(h.w, "%s%s  %s\n",
+	h.write( "%s%s  %s\n",
 		p,
 		h.c(ansiGreen, "✓ Agent"),
 		h.c(ansiDim, fmt.Sprintf(`"%s"`, truncate(finish.Output, 100))),
@@ -357,7 +363,7 @@ func (h *PrettyHandler) OnGraphNodeStart(ctx context.Context, graphName, nodeNam
 	p := h.pad(depth)
 	h.mu.Unlock()
 
-	fmt.Fprintf(h.w, "%s%s %s  %s\n",
+	h.write( "%s%s %s  %s\n",
 		p,
 		h.c(ansiBold+ansiMagenta, "> Node"),
 		h.c(ansiMagenta, nodeName),
@@ -378,7 +384,7 @@ func (h *PrettyHandler) OnGraphNodeEnd(ctx context.Context, _, nodeName string) 
 	dur := time.Since(info.startTime)
 	p := h.pad(info.depth)
 
-	fmt.Fprintf(h.w, "%s%s %s  %s\n",
+	h.write( "%s%s %s  %s\n",
 		p,
 		h.c(ansiGreen, "✓ Node"),
 		h.c(ansiMagenta, nodeName),
@@ -387,7 +393,7 @@ func (h *PrettyHandler) OnGraphNodeEnd(ctx context.Context, _, nodeName string) 
 }
 
 func (h *PrettyHandler) OnGraphCheckpoint(_ context.Context, _, threadID string) {
-	fmt.Fprintf(h.w, "%s  thread=%s\n",
+	h.write( "%s  thread=%s\n",
 		h.c(ansiGray, "• Checkpoint"),
 		threadID,
 	)
@@ -409,7 +415,7 @@ func (h *PrettyHandler) OnError(ctx context.Context, source string, err error) {
 	h.mu.Unlock()
 
 	p := h.pad(depth)
-	fmt.Fprintf(h.w, "%s%s  [%s] %v\n",
+	h.write( "%s%s  [%s] %v\n",
 		p,
 		h.c(ansiRed, "✗ Error"),
 		source, err,

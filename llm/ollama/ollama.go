@@ -112,7 +112,7 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 	ch := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(ch)
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 
 		for stream.Next() {
 			chunk := stream.Current()

@@ -151,7 +151,7 @@ func TestSimilaritySearch_EmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SimilaritySearch on empty store: %v", err)
 	}
-	if results != nil && len(results) != 0 {
+	if len(results) != 0 {
 		t.Errorf("want 0 results from empty store, got %d", len(results))
 	}
 }

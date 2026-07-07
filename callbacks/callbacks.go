@@ -57,19 +57,19 @@ type Handler interface {
 // Embed it in your own struct and override only the methods you need.
 type NoOpHandler struct{}
 
-func (NoOpHandler) OnLLMStart(_ context.Context, _ string, _ []schema.Message)  {}
-func (NoOpHandler) OnLLMEnd(_ context.Context, _ string, _ *schema.Generation)  {}
+func (NoOpHandler) OnLLMStart(_ context.Context, _ string, _ []schema.Message)    {}
+func (NoOpHandler) OnLLMEnd(_ context.Context, _ string, _ *schema.Generation)    {}
 func (NoOpHandler) OnLLMStream(_ context.Context, _ string, _ schema.StreamChunk) {}
-func (NoOpHandler) OnChainStart(_ context.Context, _ string, _ map[string]any)  {}
-func (NoOpHandler) OnChainEnd(_ context.Context, _ string, _ map[string]any)    {}
-func (NoOpHandler) OnToolStart(_ context.Context, _, _ string)                  {}
-func (NoOpHandler) OnToolEnd(_ context.Context, _, _ string)                    {}
-func (NoOpHandler) OnAgentAction(_ context.Context, _ schema.AgentAction)       {}
-func (NoOpHandler) OnAgentFinish(_ context.Context, _ schema.AgentFinish)       {}
-func (NoOpHandler) OnGraphNodeStart(_ context.Context, _, _ string)             {}
-func (NoOpHandler) OnGraphNodeEnd(_ context.Context, _, _ string)               {}
-func (NoOpHandler) OnGraphCheckpoint(_ context.Context, _, _ string)            {}
-func (NoOpHandler) OnError(_ context.Context, _ string, _ error)                {}
+func (NoOpHandler) OnChainStart(_ context.Context, _ string, _ map[string]any)    {}
+func (NoOpHandler) OnChainEnd(_ context.Context, _ string, _ map[string]any)      {}
+func (NoOpHandler) OnToolStart(_ context.Context, _, _ string)                    {}
+func (NoOpHandler) OnToolEnd(_ context.Context, _, _ string)                      {}
+func (NoOpHandler) OnAgentAction(_ context.Context, _ schema.AgentAction)         {}
+func (NoOpHandler) OnAgentFinish(_ context.Context, _ schema.AgentFinish)         {}
+func (NoOpHandler) OnGraphNodeStart(_ context.Context, _, _ string)               {}
+func (NoOpHandler) OnGraphNodeEnd(_ context.Context, _, _ string)                 {}
+func (NoOpHandler) OnGraphCheckpoint(_ context.Context, _, _ string)              {}
+func (NoOpHandler) OnError(_ context.Context, _ string, _ error)                  {}
 
 // ---------------------------------------------------------------------------
 // CallbackManager — fan-out to multiple handlers
