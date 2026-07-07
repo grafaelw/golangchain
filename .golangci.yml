@@ -1,96 +1,92 @@
-# golangci-lint configuration for golangchain
-# https://golangci-lint.run/usage/configuration/
+# golangci-lint v2 configuration for golangchain
+# https://golangci-lint.run/docs/product/migration-guide
+
+version: "2"
 
 run:
   timeout: 5m
-  # Always fetch modules in read-only mode in CI to catch go.sum drift.
+  # Never modify go.mod/go.sum during a lint run.
   modules-download-mode: readonly
 
 linters:
-  # Start from the default set and selectively add / remove.
   enable:
     - govet          # go vet checks (shadowing, printf mismatches, …)
     - errcheck       # unhandled errors
-    - staticcheck    # comprehensive static analysis (supersedes golint)
-    - gosimple       # simplification opportunities
-    - unused         # exported / unexported symbols never referenced
+    - staticcheck    # comprehensive static analysis (covers gosimple + unused in v2)
     - ineffassign    # assignments whose value is never used
     - misspell       # common typos in comments and strings
     - nolintlint     # malformed //nolint directives
-    - godot          # comments should end with a period
-    - revive         # general-purpose drop-in replacement for golint
+    - godot          # exported doc comments should end with a period
+    - revive         # general-purpose drop-in for golint
     - goimports      # import grouping and formatting
 
   disable:
     # Too opinionated / too noisy for this project:
-    - depguard       # import allow/deny list (not needed here)
-    - wrapcheck      # force errors.Wrap on every return (internal pkgs)
-    - exhaustive     # exhaustive switch on enums (not useful for string enums)
-    - gomnd          # magic numbers (too many false positives in tests)
+    - depguard       # import allow/deny list
+    - wrapcheck      # force errors.Wrap on every return
+    - exhaustive     # exhaustive switch on enums
+    - gomnd          # magic number detection
     - funlen         # function length limit
     - cyclop         # cyclomatic complexity (covered by staticcheck)
     - gocognit       # cognitive complexity
     - maintidx       # maintainability index
 
-linters-settings:
-  errcheck:
-    # Type assertions in switch/if are fine without explicit checks.
-    check-type-assertions: false
-    # Explicitly blank-assigned errors (e.g. _ = rand.Read(b)) are intentional.
-    check-blank: false
+  settings:
+    errcheck:
+      # Type assertions in switch/if are fine without explicit checks.
+      check-type-assertions: false
+      # Explicitly blank-assigned errors (e.g. _ = rand.Read(b)) are intentional.
+      check-blank: false
 
-  godot:
-    # Only enforce period on exported doc comments, not inline comments.
-    scope: declarations
-    exclude:
-      - "^TODO"
-      - "^FIXME"
-      - "^NOTE"
-      - "^nolint"
+    godot:
+      # Only enforce period on exported doc comments, not inline comments.
+      scope: declarations
+      exclude:
+        - "^TODO"
+        - "^FIXME"
+        - "^NOTE"
+        - "^nolint"
 
-  revive:
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - "checkPrivateReceivers"
+            - "sayRepetitiveInsteadOfStutters"
+        - name: unused-parameter
+          disabled: true   # too noisy in interface implementations
+
+    goimports:
+      # Keep stdlib / external / internal import groups separated.
+      local-prefixes: github.com/grafaelw/golangchain
+
+    staticcheck:
+      checks:
+        - "all"
+        - "-SA1019"   # suppress deprecated-API warnings
+
+  exclusions:
+    uniq-by-line: true
+    max-issues-per-linter: 0
+    max-same-issues: 0
+
     rules:
-      - name: exported
-        arguments:
-          - "checkPrivateReceivers"
-          - "sayRepetitiveInsteadOfStutters"
-      - name: unused-parameter
-        disabled: true   # too noisy in interface implementations
+      # Test files get relaxed rules.
+      - path: "_test\\.go$"
+        linters:
+          - errcheck
+          - godot
+          - revive
 
-  goimports:
-    # Keep stdlib / external / internal import groups separated.
-    local-prefixes: github.com/grafaelw/golangchain
+      # Example programs are intentionally simple.
+      - path: "^examples/"
+        linters:
+          - godot
+          - revive
+          - goimports
 
-  staticcheck:
-    checks:
-      - "all"
-      - "-SA1019"  # suppress deprecated-API warnings (we own the code)
-
-issues:
-  # Don't report the same issue across multiple files.
-  uniq-by-line: true
-
-  exclude-rules:
-    # Test files get relaxed rules.
-    - path: "_test\\.go$"
-      linters:
-        - errcheck
-        - godot
-        - revive
-
-    # Example programs are intentionally simple; skip style checks.
-    - path: "^examples/"
-      linters:
-        - godot
-        - revive
-        - goimports
-
-    # NoOpHandler stubs are intentional one-liners; no doc comments needed.
-    - path: "callbacks/callbacks\\.go"
-      text: "exported method.*should have comment"
-      linters:
-        - revive
-
-  # Maximum number of issues reported per linter (0 = unlimited).
-  max-issues-per-linter: 0
-  max-same-issues: 0
+      # NoOpHandler stubs are intentional one-liners.
+      - path: "callbacks/callbacks\\.go"
+        text: "exported method.*should have comment"
+        linters:
+          - revive
