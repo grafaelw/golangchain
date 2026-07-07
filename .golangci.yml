@@ -18,7 +18,6 @@ linters:
     - nolintlint     # malformed //nolint directives
     - godot          # exported doc comments should end with a period
     - revive         # general-purpose drop-in for golint
-    - goimports      # import grouping and formatting
 
   disable:
     # Too opinionated / too noisy for this project:
@@ -70,15 +69,28 @@ linters:
           - godot
           - revive
 
-      # Example programs are intentionally simple.
-      - path: "^examples/"
-        linters:
-          - godot
-          - revive
-          - goimports
-
       # NoOpHandler stubs are intentional one-liners.
       - path: "callbacks/callbacks\\.go"
         text: "exported method.*should have comment"
         linters:
           - revive
+
+# ---------------------------------------------------------------------------
+# Formatters — separate from linters in golangci-lint v2
+# goimports was reclassified as a formatter in v2 and must live here.
+# ---------------------------------------------------------------------------
+formatters:
+  enable:
+    - goimports      # import grouping: stdlib / external / internal
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/grafaelw/golangchain
+
+  exclusions:
+    rules:
+      # Example programs are intentionally informal.
+      - path: "^examples/"
+        formatters:
+          - goimports
