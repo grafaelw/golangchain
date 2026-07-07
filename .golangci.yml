@@ -88,9 +88,4 @@ formatters:
       local-prefixes:
         - github.com/grafaelw/golangchain
 
-  exclusions:
-    rules:
-      # Example programs are intentionally informal.
-      - path: "^examples/"
-        formatters:
-          - goimports
+
