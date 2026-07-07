@@ -37,6 +37,7 @@ type OpenAIEmbedder struct {
 	client    openai.Client
 	model     string
 	batchSize int
+	baseURL   string // optional: override for OpenAI-compatible servers
 }
 
 // OpenAIEmbedderOption configures an OpenAIEmbedder.
@@ -47,6 +48,12 @@ func WithModel(model string) OpenAIEmbedderOption {
 }
 func WithBatchSize(n int) OpenAIEmbedderOption {
 	return func(e *OpenAIEmbedder) { e.batchSize = n }
+}
+
+// WithBaseURL overrides the API base URL (useful for proxies or
+// OpenAI-compatible servers).
+func WithBaseURL(url string) OpenAIEmbedderOption {
+	return func(e *OpenAIEmbedder) { e.baseURL = url }
 }
 
 // NewOpenAIEmbedder creates an OpenAI embedding client.
@@ -60,13 +67,19 @@ func NewOpenAIEmbedder(apiKey string, opts ...OpenAIEmbedderOption) (*OpenAIEmbe
 		return nil, errors.New("embeddings: OpenAI API key is required")
 	}
 	e := &OpenAIEmbedder{
-		client:    openai.NewClient(option.WithAPIKey(apiKey)),
 		model:     "text-embedding-3-small",
 		batchSize: 512,
 	}
 	for _, o := range opts {
 		o(e)
 	}
+
+	reqOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if e.baseURL != "" {
+		reqOpts = append(reqOpts, option.WithBaseURL(e.baseURL))
+	}
+	e.client = openai.NewClient(reqOpts...)
+
 	return e, nil
 }
 
@@ -157,16 +170,18 @@ func NewAzureEmbedder(apiKey, endpoint, deployment, apiVersion string, opts ...A
 	}
 
 	e := &AzureEmbedder{
-		client: openai.NewClient(
-			azure.WithEndpoint(endpoint, apiVersion),
-			azure.WithAPIKey(apiKey),
-		),
 		deployment: deployment,
 		batchSize:  512,
 	}
 	for _, o := range opts {
 		o(e)
 	}
+
+	e.client = openai.NewClient(
+		azure.WithEndpoint(endpoint, apiVersion),
+		azure.WithAPIKey(apiKey),
+	)
+
 	return e, nil
 }
 

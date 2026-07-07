@@ -169,7 +169,7 @@ func main() {
 	model, err := openai.New(
 		openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
 		openai.WithModel("gpt-5.4-nano"),
-		openai.WithBaseURL(os.Getenv("OTHER_MODELS_ENDPOINT")),
+		openai.WithBaseURL("https://ai-lab-nl-sweden-foundry.services.ai.azure.com/openai/v1/"),
 	)
 	if err != nil {
 		log.Fatal(err)

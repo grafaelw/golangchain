@@ -308,11 +308,17 @@ executor  := agent.NewAgentExecutor(myAgent, []tools.Tool{retriever})
 | [`examples/simple_chain`](examples/simple_chain/main.go) | LCEL pipeline + memory + streaming |
 | [`examples/react_agent`](examples/react_agent/main.go) | Tool-calling agent with streaming events |
 | [`examples/state_graph`](examples/state_graph/main.go) | LangGraph-style StateGraph with checkpointing and human-in-the-loop |
+| [`examples/chains`](examples/chains/main.go) | LCEL Runnables (FuncRunnable, Sequential/Map/Router chains) + output parsers |
+| [`examples/memory_and_tools`](examples/memory_and_tools/main.go) | Buffer/Window/Summary memory + Calculator/FuncTool |
+| [`examples/vectorstore`](examples/vectorstore/main.go) | Embeddings + InMemoryVectorStore + RetrieverTool |
 
 Run any example:
 
 ```bash
 OPENAI_API_KEY=sk-... go run ./examples/simple_chain
+OPENAI_API_KEY=sk-... go run ./examples/chains
+OPENAI_API_KEY=sk-... go run ./examples/memory_and_tools
+OPENAI_API_KEY=sk-... go run ./examples/vectorstore
 ```
 
 ## License
