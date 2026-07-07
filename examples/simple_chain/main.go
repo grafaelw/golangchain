@@ -1,10 +1,12 @@
 // Example: simple_chain
 //
 // Demonstrates the LCEL-style pipeline:
-//   ChatPromptTemplate → LLM → StrOutputParser
+//
+//	ChatPromptTemplate → LLM → StrOutputParser
 //
 // Usage:
-//   OPENAI_API_KEY=sk-... go run .
+//
+//	Put OPENAI_API_KEY=sk-... in a .env file, then: go run .
 package main
 
 import (
@@ -12,6 +14,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/joho/godotenv"
 
 	"github.com/grafaelw/golangchain/callbacks"
 	"github.com/grafaelw/golangchain/chain"
@@ -24,28 +28,35 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// 1. Create the LLM
+	// 1. Load .env (silently ignored if the file doesn't exist,
+	// 	  so real environment variables still work in CI/production)
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found - using environment variables")
+	}
+
+	// 2. Create the LLM
 	model, err := openai.New(
-		openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
-		openai.WithModel("gpt-4o-mini"),
+		openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
+		openai.WithModel("gpt-5.4-nano"),
+		openai.WithBaseURL(os.Getenv("OTHER_MODELS_ENDPOINT")),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// 2. Build a chat prompt with conversation history placeholder
+	// 3. Build a chat prompt with conversation history placeholder
 	chatPrompt := prompt.MustNewChatPromptTemplate(
 		prompt.MustSystem("You are a knowledgeable assistant. Answer concisely."),
 		prompt.NewMessagePlaceholder("history"),
 		prompt.MustHuman("{{.question}}"),
 	)
 
-	// 3. Attach a callback for logging
+	// 4. Attach a callback for logging
 	cb := callbacks.NewCallbackManager(
 		callbacks.NewLoggingHandler(log.Printf),
 	)
 
-	// 4. Build the LLMChain
+	// 5. Build the LLMChain
 	c := chain.NewLLMChain(
 		chatPrompt,
 		model,
@@ -54,10 +65,10 @@ func main() {
 		chain.WithChainCallbacks(cb),
 	)
 
-	// 5. Set up conversation memory
+	// 6. Set up conversation memory
 	mem := memory.NewConversationWindowMemory(5)
 
-	// 6. Run a multi-turn conversation
+	// 7. Run a multi-turn conversation
 	questions := []string{
 		"What is the capital of the Netherlands?",
 		"What is its most famous museum?",
@@ -80,7 +91,7 @@ func main() {
 		_ = mem.SaveContext(ctx, q, answer)
 	}
 
-	// 7. Demonstrate streaming on the last question
+	// 8. Demonstrate streaming on the last question
 	fmt.Println("--- Streaming demo ---")
 	vars, _ := mem.LoadMemoryVariables(ctx)
 	vars["question"] = "Can you recommend one book about Amsterdam?"

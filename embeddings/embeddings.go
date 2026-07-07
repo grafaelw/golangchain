@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 
-	goopenai "github.com/sashabaranov/go-openai"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/azure"
+	"github.com/openai/openai-go/option"
 )
 
 // ---------------------------------------------------------------------------
@@ -32,7 +34,7 @@ type Embedder interface {
 
 // OpenAIEmbedder uses OpenAI's text-embedding models.
 type OpenAIEmbedder struct {
-	client    *goopenai.Client
+	client    openai.Client
 	model     string
 	batchSize int
 }
@@ -58,7 +60,7 @@ func NewOpenAIEmbedder(apiKey string, opts ...OpenAIEmbedderOption) (*OpenAIEmbe
 		return nil, errors.New("embeddings: OpenAI API key is required")
 	}
 	e := &OpenAIEmbedder{
-		client:    goopenai.NewClient(apiKey),
+		client:    openai.NewClient(option.WithAPIKey(apiKey)),
 		model:     "text-embedding-3-small",
 		batchSize: 512,
 	}
@@ -103,21 +105,16 @@ func (e *OpenAIEmbedder) EmbedQuery(ctx context.Context, text string) ([]float64
 }
 
 func (e *OpenAIEmbedder) embed(ctx context.Context, texts []string) ([][]float64, error) {
-	req := goopenai.EmbeddingRequest{
-		Input: texts,
-		Model: goopenai.EmbeddingModel(e.model),
-	}
-	resp, err := e.client.CreateEmbeddings(ctx, req)
+	resp, err := e.client.Embeddings.New(ctx, openai.EmbeddingNewParams{
+		Input: openai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: texts},
+		Model: e.model,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("embeddings: openai: %w", err)
 	}
 	out := make([][]float64, len(resp.Data))
 	for i, d := range resp.Data {
-		v := make([]float64, len(d.Embedding))
-		for j, f := range d.Embedding {
-			v[j] = float64(f)
-		}
-		out[i] = v
+		out[i] = d.Embedding
 	}
 	return out, nil
 }
@@ -128,7 +125,7 @@ func (e *OpenAIEmbedder) embed(ctx context.Context, texts []string) ([][]float64
 
 // AzureEmbedder uses Azure OpenAI's embedding deployment.
 type AzureEmbedder struct {
-	client     *goopenai.Client
+	client     openai.Client
 	deployment string
 	batchSize  int
 }
@@ -159,11 +156,11 @@ func NewAzureEmbedder(apiKey, endpoint, deployment, apiVersion string, opts ...A
 		return nil, errors.New("embeddings: Azure deployment is required")
 	}
 
-	cfg := goopenai.DefaultAzureConfig(apiKey, endpoint)
-	cfg.APIVersion = apiVersion
-
 	e := &AzureEmbedder{
-		client:     goopenai.NewClientWithConfig(cfg),
+		client: openai.NewClient(
+			azure.WithEndpoint(endpoint, apiVersion),
+			azure.WithAPIKey(apiKey),
+		),
 		deployment: deployment,
 		batchSize:  512,
 	}
@@ -205,21 +202,16 @@ func (e *AzureEmbedder) EmbedQuery(ctx context.Context, text string) ([]float64,
 }
 
 func (e *AzureEmbedder) embed(ctx context.Context, texts []string) ([][]float64, error) {
-	req := goopenai.EmbeddingRequest{
-		Input: texts,
-		Model: goopenai.EmbeddingModel(e.deployment),
-	}
-	resp, err := e.client.CreateEmbeddings(ctx, req)
+	resp, err := e.client.Embeddings.New(ctx, openai.EmbeddingNewParams{
+		Input: openai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: texts},
+		Model: e.deployment,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("embeddings: azure: %w", err)
 	}
 	out := make([][]float64, len(resp.Data))
 	for i, d := range resp.Data {
-		v := make([]float64, len(d.Embedding))
-		for j, f := range d.Embedding {
-			v[j] = float64(f)
-		}
-		out[i] = v
+		out[i] = d.Embedding
 	}
 	return out, nil
 }

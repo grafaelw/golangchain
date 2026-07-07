@@ -1,14 +1,16 @@
 // Package openai provides a golangchain LLM implementation backed by the
-// OpenAI Chat Completions API (github.com/sashabaranov/go-openai).
+// OpenAI Chat Completions API (github.com/openai/openai-go).
 package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 
-	goopenai "github.com/sashabaranov/go-openai"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 
 	"github.com/grafaelw/golangchain/llm"
 	"github.com/grafaelw/golangchain/schema"
@@ -50,7 +52,7 @@ func WithProject(proj string) ProviderOption { return func(c *config) { c.projec
 
 // LLM is the OpenAI provider. Construct with New().
 type LLM struct {
-	client *goopenai.Client
+	client openai.Client
 	cfg    config
 }
 
@@ -69,15 +71,18 @@ func New(opts ...ProviderOption) (*LLM, error) {
 		return nil, errors.New("openai: API key is required (use WithAPIKey or set OPENAI_API_KEY)")
 	}
 
-	clientCfg := goopenai.DefaultConfig(cfg.apiKey)
+	reqOpts := []option.RequestOption{option.WithAPIKey(cfg.apiKey)}
 	if cfg.baseURL != "" {
-		clientCfg.BaseURL = cfg.baseURL
+		reqOpts = append(reqOpts, option.WithBaseURL(cfg.baseURL))
 	}
 	if cfg.orgID != "" {
-		clientCfg.OrgID = cfg.orgID
+		reqOpts = append(reqOpts, option.WithOrganization(cfg.orgID))
+	}
+	if cfg.projectID != "" {
+		reqOpts = append(reqOpts, option.WithProject(cfg.projectID))
 	}
 
-	return &LLM{client: goopenai.NewClientWithConfig(clientCfg), cfg: cfg}, nil
+	return &LLM{client: openai.NewClient(reqOpts...), cfg: cfg}, nil
 }
 
 // ModelName returns the configured default model name.
@@ -90,9 +95,9 @@ func (l *LLM) ModelName() string { return l.cfg.model }
 // Generate performs a blocking chat-completions call.
 func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...llm.Option) (*schema.Generation, error) {
 	o := llm.Apply(opts)
-	req := l.buildRequest(messages, o, false)
+	params := l.buildParams(messages, o)
 
-	resp, err := l.client.CreateChatCompletion(ctx, req)
+	resp, err := l.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("openai: generate: %w", err)
 	}
@@ -107,11 +112,11 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 			Role:    schema.RoleAI,
 			Content: choice.Message.Content,
 		},
-		StopReason: string(choice.FinishReason),
+		StopReason: choice.FinishReason,
 		Usage: schema.TokenUsage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
+			PromptTokens:     int(resp.Usage.PromptTokens),
+			CompletionTokens: int(resp.Usage.CompletionTokens),
+			TotalTokens:      int(resp.Usage.TotalTokens),
 		},
 	}
 
@@ -136,34 +141,27 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 // The returned channel is closed after the final chunk or on error.
 func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm.Option) (<-chan schema.StreamChunk, error) {
 	o := llm.Apply(opts)
-	req := l.buildRequest(messages, o, true)
+	params := l.buildParams(messages, o)
 
-	stream, err := l.client.CreateChatCompletionStream(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("openai: stream: %w", err)
-	}
+	stream := l.client.Chat.Completions.NewStreaming(ctx, params)
 
 	ch := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(ch)
 		defer stream.Close()
 
-		for {
-			resp, err := stream.Recv()
-			if errors.Is(err, io.EOF) {
-				ch <- schema.StreamChunk{Done: true}
-				return
-			}
-			if err != nil {
-				ch <- schema.StreamChunk{Err: fmt.Errorf("openai: stream recv: %w", err)}
-				return
-			}
-			if len(resp.Choices) == 0 {
+		for stream.Next() {
+			chunk := stream.Current()
+			if len(chunk.Choices) == 0 {
 				continue
 			}
-			delta := resp.Choices[0].Delta
-			ch <- schema.StreamChunk{Text: delta.Content}
+			ch <- schema.StreamChunk{Text: chunk.Choices[0].Delta.Content}
 		}
+		if err := stream.Err(); err != nil {
+			ch <- schema.StreamChunk{Err: fmt.Errorf("openai: stream recv: %w", err)}
+			return
+		}
+		ch <- schema.StreamChunk{Done: true}
 	}()
 
 	return ch, nil
@@ -173,100 +171,107 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-func (l *LLM) buildRequest(messages []schema.Message, o llm.Options, stream bool) goopenai.ChatCompletionRequest {
+func (l *LLM) buildParams(messages []schema.Message, o llm.Options) openai.ChatCompletionNewParams {
 	model := l.cfg.model
 	if o.Model != nil {
 		model = *o.Model
 	}
 
-	req := goopenai.ChatCompletionRequest{
-		Model:    model,
+	params := openai.ChatCompletionNewParams{
+		Model:    shared.ChatModel(model),
 		Messages: toOpenAIMessages(messages),
-		Stream:   stream,
 	}
 
 	if o.Temperature != nil {
-		req.Temperature = float32(*o.Temperature)
+		params.Temperature = openai.Float(*o.Temperature)
 	}
 	if o.MaxTokens != nil {
-		req.MaxTokens = *o.MaxTokens
+		params.MaxTokens = openai.Int(int64(*o.MaxTokens))
 	}
 	if o.TopP != nil {
-		req.TopP = float32(*o.TopP)
+		params.TopP = openai.Float(*o.TopP)
 	}
 	if len(o.StopSequences) > 0 {
-		req.Stop = o.StopSequences
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: o.StopSequences}
 	}
 	if o.FrequencyPenalty != nil {
-		req.FrequencyPenalty = float32(*o.FrequencyPenalty)
+		params.FrequencyPenalty = openai.Float(*o.FrequencyPenalty)
 	}
 	if o.PresencePenalty != nil {
-		req.PresencePenalty = float32(*o.PresencePenalty)
+		params.PresencePenalty = openai.Float(*o.PresencePenalty)
 	}
 	if o.Seed != nil {
-		req.Seed = o.Seed
+		params.Seed = openai.Int(int64(*o.Seed))
 	}
 	if o.User != "" {
-		req.User = o.User
+		params.User = openai.String(o.User)
 	}
 	for _, td := range o.Tools {
-		req.Tools = append(req.Tools, goopenai.Tool{
-			Type: goopenai.ToolTypeFunction,
-			Function: &goopenai.FunctionDefinition{
+		var fnParams shared.FunctionParameters
+		if len(td.Parameters) > 0 {
+			_ = json.Unmarshal(td.Parameters, &fnParams)
+		}
+		params.Tools = append(params.Tools, openai.ChatCompletionToolParam{
+			Function: shared.FunctionDefinitionParam{
 				Name:        td.Name,
-				Description: td.Description,
-				Parameters:  td.Parameters,
+				Description: openai.String(td.Description),
+				Parameters:  fnParams,
 			},
 		})
 	}
 	if o.ToolChoice != "" {
 		switch o.ToolChoice {
 		case "none":
-			req.ToolChoice = "none"
-		case "auto":
-			req.ToolChoice = "auto"
-		case "required":
-			req.ToolChoice = "required"
-		default:
-			req.ToolChoice = goopenai.ToolChoice{
-				Type:     goopenai.ToolTypeFunction,
-				Function: goopenai.ToolFunction{Name: o.ToolChoice},
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String("none"),
 			}
+		case "auto":
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String("auto"),
+			}
+		case "required":
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String("required"),
+			}
+		default:
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(
+				openai.ChatCompletionNamedToolChoiceFunctionParam{Name: o.ToolChoice},
+			)
 		}
 	}
 
-	return req
+	return params
 }
 
-func toOpenAIMessages(msgs []schema.Message) []goopenai.ChatCompletionMessage {
-	out := make([]goopenai.ChatCompletionMessage, 0, len(msgs))
+func toOpenAIMessages(msgs []schema.Message) []openai.ChatCompletionMessageParamUnion {
+	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
-		cm := goopenai.ChatCompletionMessage{
-			Content: m.Content,
-			Name:    m.Name,
-		}
 		switch m.Role {
 		case schema.RoleSystem:
-			cm.Role = goopenai.ChatMessageRoleSystem
+			out = append(out, openai.SystemMessage(m.Content))
 		case schema.RoleHuman:
-			cm.Role = goopenai.ChatMessageRoleUser
+			out = append(out, openai.UserMessage(m.Content))
 		case schema.RoleAI:
-			cm.Role = goopenai.ChatMessageRoleAssistant
+			msg := openai.AssistantMessage(m.Content)
+			// Attach tool calls if present
+			if len(m.ToolCalls) > 0 {
+				asst := openai.ChatCompletionAssistantMessageParam{}
+				asst.Content.OfString = openai.String(m.Content)
+				for _, tc := range m.ToolCalls {
+					asst.ToolCalls = append(asst.ToolCalls, openai.ChatCompletionMessageToolCallParam{
+						ID: tc.ID,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: string(tc.Arguments),
+						},
+					})
+				}
+				msg = openai.ChatCompletionMessageParamUnion{OfAssistant: &asst}
+			}
+			out = append(out, msg)
 		case schema.RoleTool:
-			cm.Role = goopenai.ChatMessageRoleTool
-			cm.ToolCallID = m.ToolCallID
+			out = append(out, openai.ToolMessage(m.Content, m.ToolCallID))
 		}
-		for _, tc := range m.ToolCalls {
-			cm.ToolCalls = append(cm.ToolCalls, goopenai.ToolCall{
-				ID:   tc.ID,
-				Type: goopenai.ToolType(tc.Type),
-				Function: goopenai.FunctionCall{
-					Name:      tc.Name,
-					Arguments: string(tc.Arguments),
-				},
-			})
-		}
-		out = append(out, cm)
 	}
 	return out
 }

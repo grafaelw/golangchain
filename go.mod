@@ -4,7 +4,8 @@ go 1.26.2
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.56.0
-	github.com/sashabaranov/go-openai v1.41.2
+	github.com/joho/godotenv v1.5.1
+	github.com/openai/openai-go v1.12.0
 	google.golang.org/genai v1.62.0
 )
 
@@ -12,6 +13,8 @@ require (
 	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/auth v0.9.3 // indirect
 	cloud.google.com/go/compute/metadata v0.5.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.17.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.10.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect

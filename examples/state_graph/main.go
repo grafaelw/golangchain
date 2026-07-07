@@ -8,7 +8,8 @@
 //   - Streaming GraphEvents
 //
 // Usage:
-//   OPENAI_API_KEY=sk-... go run .
+//
+//	Put OPENAI_API_KEY=sk-... in a .env file, then: go run .
 package main
 
 import (
@@ -18,6 +19,8 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"github.com/joho/godotenv"
 
 	"github.com/grafaelw/golangchain/graph"
 	"github.com/grafaelw/golangchain/llm"
@@ -152,16 +155,23 @@ func reducer(current, update AgentState) AgentState {
 func main() {
 	ctx := context.Background()
 
-	// 1. Build LLM
+	// 1. Load .env (silently ignored if the file doesn't exist,
+	// 	  so real environment variables still work in CI/production)
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found - using environment variables")
+	}
+
+	// 2. Build LLM
 	model, err := openai.New(
-		openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
-		openai.WithModel("gpt-4o"),
+		openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
+		openai.WithModel("gpt-5.4-nano"),
+		openai.WithBaseURL(os.Getenv("OTHER_MODELS_ENDPOINT")),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// 2. Build graph
+	// 3. Build graph
 	g := graph.NewStateGraph(reducer).WithName("AgentGraph")
 
 	g.MustAddNode("agent", makeAgentNode(model))
@@ -174,7 +184,7 @@ func main() {
 	})
 	g.MustAddEdge("tools", "agent") // loop: agent can call tools multiple times
 
-	// 3. Compile with checkpointer
+	// 4. Compile with checkpointer
 	checkpointer := graph.NewMemoryCheckpointer[AgentState]()
 	compiled, err := g.Compile(
 		graph.WithCheckpointer[AgentState](checkpointer),
@@ -184,7 +194,7 @@ func main() {
 		log.Fatalf("compile: %v", err)
 	}
 
-	// 4. Run a query with streaming
+	// 5. Run a query with streaming
 	query := "What is 1234 * 5678? Also search for what DuckDuckGo is."
 	fmt.Printf("Query: %s\n\n", query)
 
@@ -238,7 +248,7 @@ func main() {
 		}
 	}
 
-	// 5. Demonstrate checkpoint listing
+	// 6. Demonstrate checkpoint listing
 	fmt.Println("\n--- Checkpoint history ---")
 	history, _ := checkpointer.List(ctx, threadID)
 	for i, cp := range history {
@@ -246,7 +256,7 @@ func main() {
 		fmt.Printf("  [%d] %s — %d messages\n", i+1, cp.CreatedAt.Format("15:04:05.000"), msgCount)
 	}
 
-	// 6. Demonstrate human-in-the-loop via Interrupt
+	// 7. Demonstrate human-in-the-loop via Interrupt
 	fmt.Println("\n--- Human-in-the-loop demo ---")
 	hiloGraph := graph.NewStateGraph(reducer)
 	hiloGraph.MustAddNode("ask_human", func(ctx context.Context, state AgentState) (AgentState, error) {
@@ -290,7 +300,7 @@ func main() {
 		}
 	}
 
-	// 7. Parallel branches demo
+	// 8. Parallel branches demo
 	fmt.Println("\n--- Parallel branches demo ---")
 	parallelGraph := graph.NewStateGraph(func(cur, upd AgentState) AgentState {
 		cur.Messages = append(cur.Messages, upd.Messages...)

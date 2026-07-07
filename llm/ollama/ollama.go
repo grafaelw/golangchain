@@ -7,9 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
-	goopenai "github.com/sashabaranov/go-openai"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 
 	"github.com/grafaelw/golangchain/llm"
 	"github.com/grafaelw/golangchain/schema"
@@ -39,7 +40,7 @@ func WithModel(model string) ProviderOption { return func(c *config) { c.model =
 
 // LLM is the Ollama provider.
 type LLM struct {
-	client *goopenai.Client
+	client openai.Client
 	cfg    config
 }
 
@@ -63,10 +64,13 @@ func New(opts ...ProviderOption) (*LLM, error) {
 
 	// Ollama's OpenAI-compatible API requires the API key field to be non-empty
 	// but doesn't validate it.
-	clientCfg := goopenai.DefaultConfig("ollama")
-	clientCfg.BaseURL = cfg.baseURL
-
-	return &LLM{client: goopenai.NewClientWithConfig(clientCfg), cfg: cfg}, nil
+	return &LLM{
+		client: openai.NewClient(
+			option.WithBaseURL(cfg.baseURL),
+			option.WithAPIKey("ollama"),
+		),
+		cfg: cfg,
+	}, nil
 }
 
 // ModelName returns the configured Ollama model tag.
@@ -75,9 +79,9 @@ func (l *LLM) ModelName() string { return l.cfg.model }
 // Generate performs a blocking call to the local Ollama server.
 func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...llm.Option) (*schema.Generation, error) {
 	o := llm.Apply(opts)
-	req := l.buildRequest(messages, o, false)
+	params := l.buildParams(messages, o)
 
-	resp, err := l.client.CreateChatCompletion(ctx, req)
+	resp, err := l.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("ollama: generate: %w", err)
 	}
@@ -89,11 +93,11 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 	return &schema.Generation{
 		Text:       choice.Message.Content,
 		Message:    schema.Message{Role: schema.RoleAI, Content: choice.Message.Content},
-		StopReason: string(choice.FinishReason),
+		StopReason: choice.FinishReason,
 		Usage: schema.TokenUsage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
+			PromptTokens:     int(resp.Usage.PromptTokens),
+			CompletionTokens: int(resp.Usage.CompletionTokens),
+			TotalTokens:      int(resp.Usage.TotalTokens),
 		},
 	}, nil
 }
@@ -101,71 +105,63 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 // Stream performs a streaming call to the local Ollama server.
 func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm.Option) (<-chan schema.StreamChunk, error) {
 	o := llm.Apply(opts)
-	req := l.buildRequest(messages, o, true)
+	params := l.buildParams(messages, o)
 
-	stream, err := l.client.CreateChatCompletionStream(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("ollama: stream: %w", err)
-	}
+	stream := l.client.Chat.Completions.NewStreaming(ctx, params)
 
 	ch := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(ch)
 		defer stream.Close()
-		for {
-			resp, err := stream.Recv()
-			if errors.Is(err, io.EOF) {
-				ch <- schema.StreamChunk{Done: true}
-				return
-			}
-			if err != nil {
-				ch <- schema.StreamChunk{Err: fmt.Errorf("ollama: stream recv: %w", err)}
-				return
-			}
-			if len(resp.Choices) == 0 {
+
+		for stream.Next() {
+			chunk := stream.Current()
+			if len(chunk.Choices) == 0 {
 				continue
 			}
-			ch <- schema.StreamChunk{Text: resp.Choices[0].Delta.Content}
+			ch <- schema.StreamChunk{Text: chunk.Choices[0].Delta.Content}
 		}
+		if err := stream.Err(); err != nil {
+			ch <- schema.StreamChunk{Err: fmt.Errorf("ollama: stream recv: %w", err)}
+			return
+		}
+		ch <- schema.StreamChunk{Done: true}
 	}()
 
 	return ch, nil
 }
 
-func (l *LLM) buildRequest(messages []schema.Message, o llm.Options, stream bool) goopenai.ChatCompletionRequest {
+func (l *LLM) buildParams(messages []schema.Message, o llm.Options) openai.ChatCompletionNewParams {
 	model := l.cfg.model
 	if o.Model != nil {
 		model = *o.Model
 	}
-	req := goopenai.ChatCompletionRequest{
-		Model:    model,
+	params := openai.ChatCompletionNewParams{
+		Model:    shared.ChatModel(model),
 		Messages: toOpenAIMessages(messages),
-		Stream:   stream,
 	}
 	if o.Temperature != nil {
-		req.Temperature = float32(*o.Temperature)
+		params.Temperature = openai.Float(*o.Temperature)
 	}
 	if o.MaxTokens != nil {
-		req.MaxTokens = *o.MaxTokens
+		params.MaxTokens = openai.Int(int64(*o.MaxTokens))
 	}
-	return req
+	return params
 }
 
-func toOpenAIMessages(msgs []schema.Message) []goopenai.ChatCompletionMessage {
-	out := make([]goopenai.ChatCompletionMessage, 0, len(msgs))
+func toOpenAIMessages(msgs []schema.Message) []openai.ChatCompletionMessageParamUnion {
+	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
-		cm := goopenai.ChatCompletionMessage{Content: m.Content}
 		switch m.Role {
 		case schema.RoleSystem:
-			cm.Role = goopenai.ChatMessageRoleSystem
+			out = append(out, openai.SystemMessage(m.Content))
 		case schema.RoleHuman:
-			cm.Role = goopenai.ChatMessageRoleUser
+			out = append(out, openai.UserMessage(m.Content))
 		case schema.RoleAI:
-			cm.Role = goopenai.ChatMessageRoleAssistant
+			out = append(out, openai.AssistantMessage(m.Content))
 		case schema.RoleTool:
-			cm.Role = goopenai.ChatMessageRoleTool
+			out = append(out, openai.ToolMessage(m.Content, m.ToolCallID))
 		}
-		out = append(out, cm)
 	}
 	return out
 }
