@@ -24,7 +24,7 @@ linters:
     - depguard       # import allow/deny list
     - wrapcheck      # force errors.Wrap on every return
     - exhaustive     # exhaustive switch on enums
-    - gomnd          # magic number detection
+    - mnd            # magic number detection (gomnd was renamed to mnd in v2)
     - funlen         # function length limit
     - cyclop         # cyclomatic complexity (covered by staticcheck)
     - gocognit       # cognitive complexity
