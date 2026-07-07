@@ -468,45 +468,49 @@ func (c *CompiledGraph[S]) stream(ctx context.Context, input S, rc *runConfig[S]
 				return
 			}
 
-			// Execute node
-			fn, ok := c.nodes[nodeName]
-			if !ok {
-				ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: unknown node %q", nodeName)}
-				return
-			}
+		// Execute node
+		fn, ok := c.nodes[nodeName]
+		if !ok {
+			ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: unknown node %q", nodeName)}
+			return
+		}
 
-			if c.cfg.callbacks != nil {
-				c.cfg.callbacks.OnGraphNodeStart(ctx, c.name, nodeName)
-			}
-			ch <- GraphEvent[S]{Type: GraphEventNodeStart, Node: nodeName, State: state}
+		// Inject a node-level run ID. Passing nodeCtx to fn() lets any
+		// callbacks fired inside the node (e.g. LLM calls) reference this
+		// node run as their parent.
+		nodeCtx := callbacks.WithRunID(ctx, callbacks.NewRunID())
+		if c.cfg.callbacks != nil {
+			c.cfg.callbacks.OnGraphNodeStart(nodeCtx, c.name, nodeName)
+		}
+		ch <- GraphEvent[S]{Type: GraphEventNodeStart, Node: nodeName, State: state}
 
-			update, err := fn(ctx, state)
-			steps++
+		update, err := fn(nodeCtx, state)
+		steps++
 
-			// Human-in-the-loop interrupt
-			if interrupt, ok := err.(*Interrupt); ok {
-				// Save state so the run can be resumed
-				state = c.reducer(state, update)
-				c.saveCheckpoint(ctx, rc, state, ch)
-				ch <- GraphEvent[S]{Type: GraphEventError, Err: interrupt}
-				return
-			}
-
-			if err != nil {
-				if c.cfg.callbacks != nil {
-					c.cfg.callbacks.OnError(ctx, nodeName, err)
-				}
-				ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: node %q: %w", nodeName, err)}
-				return
-			}
-
-			// Merge update into state
+		// Human-in-the-loop interrupt
+		if interrupt, ok := err.(*Interrupt); ok {
+			// Save state so the run can be resumed
 			state = c.reducer(state, update)
+			c.saveCheckpoint(ctx, rc, state, ch)
+			ch <- GraphEvent[S]{Type: GraphEventError, Err: interrupt}
+			return
+		}
 
+		if err != nil {
 			if c.cfg.callbacks != nil {
-				c.cfg.callbacks.OnGraphNodeEnd(ctx, c.name, nodeName)
+				c.cfg.callbacks.OnError(nodeCtx, nodeName, err)
 			}
-			ch <- GraphEvent[S]{Type: GraphEventNodeEnd, Node: nodeName, State: state}
+			ch <- GraphEvent[S]{Type: GraphEventError, Err: fmt.Errorf("graph: node %q: %w", nodeName, err)}
+			return
+		}
+
+		// Merge update into state
+		state = c.reducer(state, update)
+
+		if c.cfg.callbacks != nil {
+			c.cfg.callbacks.OnGraphNodeEnd(nodeCtx, c.name, nodeName)
+		}
+		ch <- GraphEvent[S]{Type: GraphEventNodeEnd, Node: nodeName, State: state}
 
 			// Checkpoint after each node if configured
 			c.saveCheckpoint(ctx, rc, state, ch)
@@ -603,13 +607,27 @@ func (c *CompiledGraph[S]) runParallel(ctx context.Context, nodeNames []string, 
 					results <- result{err: fmt.Errorf("graph: parallel branch: unknown node %q", n)}
 					return
 				}
-				update, err := fn(ctx, merged)
+
+				// Inject a node run ID so nested callbacks have the right parent.
+				nodeCtx := callbacks.WithRunID(ctx, callbacks.NewRunID())
+				if c.cfg.callbacks != nil {
+					c.cfg.callbacks.OnGraphNodeStart(nodeCtx, c.name, n)
+				}
+
+				update, err := fn(nodeCtx, merged)
 				steps++
 				if err != nil {
+					if c.cfg.callbacks != nil {
+						c.cfg.callbacks.OnError(nodeCtx, n, err)
+					}
 					results <- result{err: fmt.Errorf("graph: parallel branch %q: %w", n, err)}
 					return
 				}
 				merged = c.reducer(merged, update)
+
+				if c.cfg.callbacks != nil {
+					c.cfg.callbacks.OnGraphNodeEnd(nodeCtx, c.name, n)
+				}
 
 				nextNodes, err := c.resolveEdges(ctx, n, merged)
 				if err != nil {

@@ -148,18 +148,20 @@ func (r *LLMRunnable) Invoke(ctx context.Context, input any) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("LLMRunnable: %w", err)
 	}
+	llmCtx := ctx
 	if r.Callbacks != nil {
-		r.Callbacks.OnLLMStart(ctx, r.LLM.ModelName(), msgs)
+		llmCtx = callbacks.WithRunID(ctx, callbacks.NewRunID())
+		r.Callbacks.OnLLMStart(llmCtx, r.LLM.ModelName(), msgs)
 	}
-	gen, err := r.LLM.Generate(ctx, msgs, r.Opts...)
+	gen, err := r.LLM.Generate(llmCtx, msgs, r.Opts...)
 	if err != nil {
 		if r.Callbacks != nil {
-			r.Callbacks.OnError(ctx, "LLMRunnable", err)
+			r.Callbacks.OnError(llmCtx, "LLMRunnable", err)
 		}
 		return nil, fmt.Errorf("LLMRunnable: %w", err)
 	}
 	if r.Callbacks != nil {
-		r.Callbacks.OnLLMEnd(ctx, r.LLM.ModelName(), gen)
+		r.Callbacks.OnLLMEnd(llmCtx, r.LLM.ModelName(), gen)
 	}
 	return gen, nil
 }
@@ -169,11 +171,16 @@ func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk
 	if err != nil {
 		return nil, fmt.Errorf("LLMRunnable: %w", err)
 	}
+	llmCtx := ctx
 	if r.Callbacks != nil {
-		r.Callbacks.OnLLMStart(ctx, r.LLM.ModelName(), msgs)
+		llmCtx = callbacks.WithRunID(ctx, callbacks.NewRunID())
+		r.Callbacks.OnLLMStart(llmCtx, r.LLM.ModelName(), msgs)
 	}
-	llmCh, err := r.LLM.Stream(ctx, msgs, r.Opts...)
+	llmCh, err := r.LLM.Stream(llmCtx, msgs, r.Opts...)
 	if err != nil {
+		if r.Callbacks != nil {
+			r.Callbacks.OnError(llmCtx, "LLMRunnable", err)
+		}
 		return nil, fmt.Errorf("LLMRunnable: stream: %w", err)
 	}
 
@@ -181,12 +188,20 @@ func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk
 	go func() {
 		defer close(out)
 		for chunk := range llmCh {
-			if r.Callbacks != nil {
-				r.Callbacks.OnLLMStream(ctx, r.LLM.ModelName(), chunk)
+			if r.Callbacks != nil && chunk.Text != "" {
+				r.Callbacks.OnLLMStream(llmCtx, r.LLM.ModelName(), chunk)
 			}
 			if chunk.Err != nil {
+				if r.Callbacks != nil {
+					r.Callbacks.OnError(llmCtx, "LLMRunnable", chunk.Err)
+				}
 				out <- StreamChunk{Err: chunk.Err}
 				return
+			}
+			if chunk.Done {
+				if r.Callbacks != nil {
+					r.Callbacks.OnLLMEnd(llmCtx, r.LLM.ModelName(), &schema.Generation{})
+				}
 			}
 			out <- StreamChunk{Value: chunk.Text, Done: chunk.Done}
 		}
@@ -264,8 +279,12 @@ func (c *LLMChain) Invoke(ctx context.Context, input any) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.name, err)
 	}
+
+	// Inject a chain-level run ID so child spans can reference it as parent.
+	chainCtx := ctx
 	if c.callbacks != nil {
-		c.callbacks.OnChainStart(ctx, c.name, vars)
+		chainCtx = callbacks.WithRunID(ctx, callbacks.NewRunID())
+		c.callbacks.OnChainStart(chainCtx, c.name, vars)
 	}
 
 	msgs, err := c.formatter.FormatMessages(vars)
@@ -273,18 +292,21 @@ func (c *LLMChain) Invoke(ctx context.Context, input any) (any, error) {
 		return nil, fmt.Errorf("%s: format: %w", c.name, err)
 	}
 
+	// Inject an LLM-level run ID nested under the chain run.
+	llmCtx := chainCtx
 	if c.callbacks != nil {
-		c.callbacks.OnLLMStart(ctx, c.llm.ModelName(), msgs)
+		llmCtx = callbacks.WithRunID(chainCtx, callbacks.NewRunID())
+		c.callbacks.OnLLMStart(llmCtx, c.llm.ModelName(), msgs)
 	}
-	gen, err := c.llm.Generate(ctx, msgs, c.llmOpts...)
+	gen, err := c.llm.Generate(llmCtx, msgs, c.llmOpts...)
 	if err != nil {
 		if c.callbacks != nil {
-			c.callbacks.OnError(ctx, c.name, err)
+			c.callbacks.OnError(llmCtx, c.name, err)
 		}
 		return nil, fmt.Errorf("%s: llm: %w", c.name, err)
 	}
 	if c.callbacks != nil {
-		c.callbacks.OnLLMEnd(ctx, c.llm.ModelName(), gen)
+		c.callbacks.OnLLMEnd(llmCtx, c.llm.ModelName(), gen)
 	}
 
 	parsed, err := c.parser.Parse(gen.Text)
@@ -293,7 +315,7 @@ func (c *LLMChain) Invoke(ctx context.Context, input any) (any, error) {
 	}
 
 	if c.callbacks != nil {
-		c.callbacks.OnChainEnd(ctx, c.name, map[string]any{"output": parsed})
+		c.callbacks.OnChainEnd(chainCtx, c.name, map[string]any{"output": parsed})
 	}
 	return parsed, nil
 }
@@ -305,12 +327,29 @@ func (c *LLMChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, e
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.name, err)
 	}
+
+	chainCtx := ctx
+	if c.callbacks != nil {
+		chainCtx = callbacks.WithRunID(ctx, callbacks.NewRunID())
+		c.callbacks.OnChainStart(chainCtx, c.name, vars)
+	}
+
 	msgs, err := c.formatter.FormatMessages(vars)
 	if err != nil {
 		return nil, fmt.Errorf("%s: format: %w", c.name, err)
 	}
-	llmCh, err := c.llm.Stream(ctx, msgs, c.llmOpts...)
+
+	llmCtx := chainCtx
+	if c.callbacks != nil {
+		llmCtx = callbacks.WithRunID(chainCtx, callbacks.NewRunID())
+		c.callbacks.OnLLMStart(llmCtx, c.llm.ModelName(), msgs)
+	}
+
+	llmCh, err := c.llm.Stream(llmCtx, msgs, c.llmOpts...)
 	if err != nil {
+		if c.callbacks != nil {
+			c.callbacks.OnError(llmCtx, c.name, err)
+		}
 		return nil, fmt.Errorf("%s: stream: %w", c.name, err)
 	}
 
@@ -320,17 +359,28 @@ func (c *LLMChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, e
 		var full string
 		for chunk := range llmCh {
 			if chunk.Err != nil {
+				if c.callbacks != nil {
+					c.callbacks.OnError(llmCtx, c.name, chunk.Err)
+				}
 				out <- StreamChunk{Err: chunk.Err}
 				return
+			}
+			if c.callbacks != nil && chunk.Text != "" {
+				c.callbacks.OnLLMStream(llmCtx, c.llm.ModelName(), chunk)
 			}
 			full += chunk.Text
 			out <- StreamChunk{Value: chunk.Text}
 			if chunk.Done {
-				// Apply parser to accumulated text
+				if c.callbacks != nil {
+					c.callbacks.OnLLMEnd(llmCtx, c.llm.ModelName(), &schema.Generation{Text: full})
+				}
 				parsed, err := c.parser.Parse(full)
 				if err != nil {
 					out <- StreamChunk{Err: err}
 					return
+				}
+				if c.callbacks != nil {
+					c.callbacks.OnChainEnd(chainCtx, c.name, map[string]any{"output": parsed})
 				}
 				out <- StreamChunk{Value: parsed, Done: true}
 				return

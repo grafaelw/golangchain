@@ -5,6 +5,8 @@ package callbacks
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 
 	"github.com/grafaelw/golangchain/schema"
@@ -55,19 +57,19 @@ type Handler interface {
 // Embed it in your own struct and override only the methods you need.
 type NoOpHandler struct{}
 
-func (NoOpHandler) OnLLMStart(ctx context.Context, modelName string, prompts []schema.Message) {}
-func (NoOpHandler) OnLLMEnd(ctx context.Context, modelName string, gen *schema.Generation)     {}
-func (NoOpHandler) OnLLMStream(ctx context.Context, modelName string, chunk schema.StreamChunk) {}
-func (NoOpHandler) OnChainStart(ctx context.Context, chainName string, inputs map[string]any)   {}
-func (NoOpHandler) OnChainEnd(ctx context.Context, chainName string, outputs map[string]any)    {}
-func (NoOpHandler) OnToolStart(ctx context.Context, toolName string, input string)              {}
-func (NoOpHandler) OnToolEnd(ctx context.Context, toolName string, output string)               {}
-func (NoOpHandler) OnAgentAction(ctx context.Context, action schema.AgentAction)                {}
-func (NoOpHandler) OnAgentFinish(ctx context.Context, finish schema.AgentFinish)                {}
-func (NoOpHandler) OnGraphNodeStart(ctx context.Context, graphName, nodeName string)            {}
-func (NoOpHandler) OnGraphNodeEnd(ctx context.Context, graphName, nodeName string)              {}
-func (NoOpHandler) OnGraphCheckpoint(ctx context.Context, graphName, threadID string)           {}
-func (NoOpHandler) OnError(ctx context.Context, source string, err error)                       {}
+func (NoOpHandler) OnLLMStart(_ context.Context, _ string, _ []schema.Message)  {}
+func (NoOpHandler) OnLLMEnd(_ context.Context, _ string, _ *schema.Generation)  {}
+func (NoOpHandler) OnLLMStream(_ context.Context, _ string, _ schema.StreamChunk) {}
+func (NoOpHandler) OnChainStart(_ context.Context, _ string, _ map[string]any)  {}
+func (NoOpHandler) OnChainEnd(_ context.Context, _ string, _ map[string]any)    {}
+func (NoOpHandler) OnToolStart(_ context.Context, _, _ string)                  {}
+func (NoOpHandler) OnToolEnd(_ context.Context, _, _ string)                    {}
+func (NoOpHandler) OnAgentAction(_ context.Context, _ schema.AgentAction)       {}
+func (NoOpHandler) OnAgentFinish(_ context.Context, _ schema.AgentFinish)       {}
+func (NoOpHandler) OnGraphNodeStart(_ context.Context, _, _ string)             {}
+func (NoOpHandler) OnGraphNodeEnd(_ context.Context, _, _ string)               {}
+func (NoOpHandler) OnGraphCheckpoint(_ context.Context, _, _ string)            {}
+func (NoOpHandler) OnError(_ context.Context, _ string, _ error)                {}
 
 // ---------------------------------------------------------------------------
 // CallbackManager — fan-out to multiple handlers
@@ -143,18 +145,68 @@ func (m *CallbackManager) OnError(ctx context.Context, source string, err error)
 }
 
 // ---------------------------------------------------------------------------
-// LoggingHandler — ready-made handler that prints to any io.Writer
+// Context helpers — run ID propagation for hierarchical tracing
 // ---------------------------------------------------------------------------
 
-// LoggingHandler is a built-in Handler that logs every event to an io.Writer
-// (default: os.Stderr). It is useful during development.
+type runKey struct{}
+type parentRunKey struct{}
+type callbacksContextKey struct{}
+
+// NewRunID generates a short, unique identifier for a trace run.
+func NewRunID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// WithRunID returns a new context that marks id as the current run.
+// The previous run ID (if any) is automatically promoted to the parent slot,
+// so handlers can reconstruct the full parent→child hierarchy.
+func WithRunID(ctx context.Context, id string) context.Context {
+	prev := RunIDFromContext(ctx)
+	ctx = context.WithValue(ctx, parentRunKey{}, prev)
+	return context.WithValue(ctx, runKey{}, id)
+}
+
+// RunIDFromContext returns the current run ID stored in ctx.
+// Returns "" if none has been set.
+func RunIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(runKey{}).(string)
+	return id
+}
+
+// ParentRunIDFromContext returns the parent run ID stored in ctx.
+// Returns "" if the current run is a root (has no parent).
+func ParentRunIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(parentRunKey{}).(string)
+	return id
+}
+
+// WithCallbackManager stores cm in ctx so functions that do not receive the
+// manager directly (e.g., agent Plan methods) can retrieve it.
+func WithCallbackManager(ctx context.Context, cm *CallbackManager) context.Context {
+	return context.WithValue(ctx, callbacksContextKey{}, cm)
+}
+
+// CallbackManagerFromContext retrieves a CallbackManager from ctx.
+// Returns nil if none has been stored.
+func CallbackManagerFromContext(ctx context.Context) *CallbackManager {
+	cm, _ := ctx.Value(callbacksContextKey{}).(*CallbackManager)
+	return cm
+}
+
+// ---------------------------------------------------------------------------
+// LoggingHandler — ready-made handler that prints to any printf-style func
+// ---------------------------------------------------------------------------
+
+// LoggingHandler is a built-in Handler that logs every event using the
+// supplied printf-style function (e.g. log.Printf or a slog wrapper).
 type LoggingHandler struct {
 	NoOpHandler
 	logFn func(format string, args ...any)
 }
 
-// NewLoggingHandler returns a LoggingHandler that writes to the supplied log
-// function (e.g. log.Printf or slog.Info-style wrapper).
+// NewLoggingHandler returns a LoggingHandler that writes via logFn.
 func NewLoggingHandler(logFn func(format string, args ...any)) *LoggingHandler {
 	return &LoggingHandler{logFn: logFn}
 }
@@ -165,6 +217,11 @@ func (l *LoggingHandler) OnLLMStart(_ context.Context, model string, msgs []sche
 func (l *LoggingHandler) OnLLMEnd(_ context.Context, model string, gen *schema.Generation) {
 	l.logFn("[LLM] end model=%s stop=%s prompt_tokens=%d completion_tokens=%d",
 		model, gen.StopReason, gen.Usage.PromptTokens, gen.Usage.CompletionTokens)
+}
+func (l *LoggingHandler) OnLLMStream(_ context.Context, model string, chunk schema.StreamChunk) {
+	if chunk.Done {
+		l.logFn("[LLM] stream done model=%s", model)
+	}
 }
 func (l *LoggingHandler) OnChainStart(_ context.Context, name string, _ map[string]any) {
 	l.logFn("[Chain] start name=%s", name)
@@ -189,6 +246,9 @@ func (l *LoggingHandler) OnGraphNodeStart(_ context.Context, graph, node string)
 }
 func (l *LoggingHandler) OnGraphNodeEnd(_ context.Context, graph, node string) {
 	l.logFn("[Graph] node end graph=%s node=%s", graph, node)
+}
+func (l *LoggingHandler) OnGraphCheckpoint(_ context.Context, graph, threadID string) {
+	l.logFn("[Graph] checkpoint graph=%s thread=%s", graph, threadID)
 }
 func (l *LoggingHandler) OnError(_ context.Context, source string, err error) {
 	l.logFn("[ERROR] source=%s err=%v", source, err)

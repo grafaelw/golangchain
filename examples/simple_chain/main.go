@@ -28,13 +28,17 @@ import (
 func main() {
 	ctx := context.Background()
 
+	// -------------------------------------------------------------------------
 	// 1. Load .env (silently ignored if the file doesn't exist,
 	// 	  so real environment variables still work in CI/production)
+	// -------------------------------------------------------------------------
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found - using environment variables")
 	}
 
+	// -------------------------------------------------------------------------
 	// 2. Create the LLM
+	// -------------------------------------------------------------------------
 	model, err := openai.New(
 		openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
 		openai.WithModel("gpt-5.4-nano"),
@@ -44,19 +48,25 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// -------------------------------------------------------------------------
 	// 3. Build a chat prompt with conversation history placeholder
+	// -------------------------------------------------------------------------
 	chatPrompt := prompt.MustNewChatPromptTemplate(
 		prompt.MustSystem("You are a knowledgeable assistant. Answer concisely."),
 		prompt.NewMessagePlaceholder("history"),
 		prompt.MustHuman("{{.question}}"),
 	)
 
+	// -------------------------------------------------------------------------
 	// 4. Attach a callback for logging
+	// -------------------------------------------------------------------------
 	cb := callbacks.NewCallbackManager(
 		callbacks.NewLoggingHandler(log.Printf),
 	)
 
+	// -------------------------------------------------------------------------
 	// 5. Build the LLMChain
+	// -------------------------------------------------------------------------
 	c := chain.NewLLMChain(
 		chatPrompt,
 		model,
@@ -65,10 +75,14 @@ func main() {
 		chain.WithChainCallbacks(cb),
 	)
 
+	// -------------------------------------------------------------------------
 	// 6. Set up conversation memory
+	// -------------------------------------------------------------------------
 	mem := memory.NewConversationWindowMemory(5)
 
+	// -------------------------------------------------------------------------
 	// 7. Run a multi-turn conversation
+	// -------------------------------------------------------------------------
 	questions := []string{
 		"What is the capital of the Netherlands?",
 		"What is its most famous museum?",
@@ -91,7 +105,9 @@ func main() {
 		_ = mem.SaveContext(ctx, q, answer)
 	}
 
+	// -------------------------------------------------------------------------
 	// 8. Demonstrate streaming on the last question
+	// -------------------------------------------------------------------------
 	fmt.Println("--- Streaming demo ---")
 	vars, _ := mem.LoadMemoryVariables(ctx)
 	vars["question"] = "Can you recommend one book about Amsterdam?"

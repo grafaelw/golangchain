@@ -1,0 +1,191 @@
+# golangchain — CI/CD pipeline
+#
+# Jobs
+# ────
+#  lint      go vet + golangci-lint + go mod tidy check
+#  test      build + unit tests across Linux / macOS / Windows
+#  race      data-race detection (Linux only, requires CGO)
+#  coverage  per-package coverage report + artifact upload
+#  security  govulncheck vulnerability scan
+#
+# Triggers: every push / PR to main or master, plus a weekly Sunday scan
+# so upstream vulnerability disclosures are caught even without new commits.
+
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  schedule:
+    # Every Sunday at 03:00 UTC — catches new CVEs without a code push.
+    - cron: "0 3 * * 0"
+
+# Minimal permissions — only what each job actually needs.
+permissions:
+  contents: read
+
+# Cancel an in-progress run for the same branch/PR when a newer one starts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared defaults
+# ─────────────────────────────────────────────────────────────────────────────
+defaults:
+  run:
+    shell: bash
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 1 — Lint
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Read the Go version directly from go.mod so it's always in sync.
+          go-version-file: go.mod
+          cache: true
+
+      # Verify go.mod and go.sum are in sync with the source tree.
+      # If a developer forgot `go mod tidy`, this step will fail with a clear diff.
+      - name: Check go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum || \
+            { echo "::error::go.mod or go.sum is out of date. Run 'go mod tidy' and commit the result."; exit 1; }
+
+      # Verify the module download cache matches go.sum (no tampering).
+      - name: Verify module integrity
+        run: go mod verify
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m --config=.golangci.yml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2 — Build + Test matrix
+# ─────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false   # let all platforms finish even if one fails
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Build everything first so compilation errors surface separately from
+      # test failures.
+      - name: Build
+        run: go build -v ./...
+
+      # -count=1   disables the test result cache (always run fresh)
+      # -timeout   hard limit per package; prevents hung tests blocking the run
+      - name: Test
+        run: go test -v -count=1 -timeout=120s ./...
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 3 — Race detector  (Linux only — requires GCC / CGO)
+# ─────────────────────────────────────────────────────────────────────────────
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # GCC is pre-installed on ubuntu-latest; CGO_ENABLED=1 is the default.
+      - name: Test with -race
+        run: go test -race -count=1 -timeout=180s ./...
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 4 — Coverage
+# ─────────────────────────────────────────────────────────────────────────────
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generate coverage profile
+        run: |
+          go test -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out | tee coverage-summary.txt
+          # Print total coverage prominently for the job summary.
+          TOTAL=$(grep "^total:" coverage-summary.txt | awk '{print $3}')
+          echo "### Coverage: ${TOTAL}" >> "$GITHUB_STEP_SUMMARY"
+
+      # Upload the raw profile so it can be downloaded and fed into external
+      # tools (Codecov, SonarQube, etc.) without committing credentials here.
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: |
+            coverage.out
+            coverage-summary.txt
+          retention-days: 7
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 5 — Security / vulnerability scan
+# ─────────────────────────────────────────────────────────────────────────────
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    # Run on every push/PR *and* on the weekly schedule.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # govulncheck cross-references the module graph against the Go
+      # vulnerability database (https://vuln.go.dev/).
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...

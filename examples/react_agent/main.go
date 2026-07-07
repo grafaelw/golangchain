@@ -25,13 +25,17 @@ import (
 func main() {
 	ctx := context.Background()
 
+	// -------------------------------------------------------------------------
 	// 1. Load .env (silently ignored if the file doesn't exist,
 	// 	  so real environment variables still work in CI/production)
+
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found - using environment variables")
 	}
 
+	// -------------------------------------------------------------------------
 	// 2. Create the LLM
+	// -------------------------------------------------------------------------
 	model, err := openai.New(
 		openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
 		openai.WithModel("gpt-5.4-nano"),
@@ -41,25 +45,33 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// -------------------------------------------------------------------------
 	// 3. Define tools
+	// -------------------------------------------------------------------------
 	agentTools := []tools.Tool{
 		tools.Calculator{},
 		tools.NewDuckDuckGoSearch(),
 		tools.NewHTTPFetch(),
 	}
 
+	// -------------------------------------------------------------------------
 	// 4. Create a ToolCallingAgent (uses native function-calling API)
+	// -------------------------------------------------------------------------
 	systemPrompt := `You are a helpful research assistant. Use tools when you need
 real-time information or to perform calculations. Always show your reasoning.`
 
 	toolAgent := agent.NewToolCallingAgent(model, agentTools, systemPrompt)
 
+	// -------------------------------------------------------------------------
 	// 5. Wire up a logging callback
+	// -------------------------------------------------------------------------
 	cb := callbacks.NewCallbackManager(
 		callbacks.NewLoggingHandler(log.Printf),
 	)
 
+	// -------------------------------------------------------------------------
 	// 6. Create AgentExecutor
+	// -------------------------------------------------------------------------
 	executor := agent.NewAgentExecutor(
 		toolAgent,
 		agentTools,
@@ -68,7 +80,9 @@ real-time information or to perform calculations. Always show your reasoning.`
 		agent.WithVerbose(true),
 	)
 
+	// -------------------------------------------------------------------------
 	// 7. Run queries
+	// -------------------------------------------------------------------------
 	queries := []string{
 		"What is 1337 * 42 + sqrt(144)?",
 		"What is the current population of Amsterdam?",
@@ -98,7 +112,9 @@ real-time information or to perform calculations. Always show your reasoning.`
 		}
 	}
 
+	// -------------------------------------------------------------------------
 	// 8. Demonstrate ReActAgent (text-based, works with any LLM)
+	// -------------------------------------------------------------------------
 	fmt.Println("\n=== ReAct Agent (text-based) ===")
 	reactAgent := agent.NewReActAgent(model, agentTools)
 	reactExecutor := agent.NewAgentExecutor(reactAgent, agentTools, agent.WithMaxIter(6))

@@ -155,13 +155,17 @@ func reducer(current, update AgentState) AgentState {
 func main() {
 	ctx := context.Background()
 
+	// -------------------------------------------------------------------------
 	// 1. Load .env (silently ignored if the file doesn't exist,
 	// 	  so real environment variables still work in CI/production)
+	// -------------------------------------------------------------------------
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found - using environment variables")
 	}
 
+	// -------------------------------------------------------------------------
 	// 2. Build LLM
+	// -------------------------------------------------------------------------
 	model, err := openai.New(
 		openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
 		openai.WithModel("gpt-5.4-nano"),
@@ -171,7 +175,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// -------------------------------------------------------------------------
 	// 3. Build graph
+	// -------------------------------------------------------------------------
 	g := graph.NewStateGraph(reducer).WithName("AgentGraph")
 
 	g.MustAddNode("agent", makeAgentNode(model))
@@ -184,7 +190,9 @@ func main() {
 	})
 	g.MustAddEdge("tools", "agent") // loop: agent can call tools multiple times
 
+	// -------------------------------------------------------------------------
 	// 4. Compile with checkpointer
+	// -------------------------------------------------------------------------
 	checkpointer := graph.NewMemoryCheckpointer[AgentState]()
 	compiled, err := g.Compile(
 		graph.WithCheckpointer[AgentState](checkpointer),
@@ -194,7 +202,9 @@ func main() {
 		log.Fatalf("compile: %v", err)
 	}
 
+	// -------------------------------------------------------------------------
 	// 5. Run a query with streaming
+	// -------------------------------------------------------------------------
 	query := "What is 1234 * 5678? Also search for what DuckDuckGo is."
 	fmt.Printf("Query: %s\n\n", query)
 
@@ -248,7 +258,9 @@ func main() {
 		}
 	}
 
+	// -------------------------------------------------------------------------
 	// 6. Demonstrate checkpoint listing
+	// -------------------------------------------------------------------------
 	fmt.Println("\n--- Checkpoint history ---")
 	history, _ := checkpointer.List(ctx, threadID)
 	for i, cp := range history {
@@ -256,7 +268,9 @@ func main() {
 		fmt.Printf("  [%d] %s — %d messages\n", i+1, cp.CreatedAt.Format("15:04:05.000"), msgCount)
 	}
 
+	// -------------------------------------------------------------------------
 	// 7. Demonstrate human-in-the-loop via Interrupt
+	// -------------------------------------------------------------------------
 	fmt.Println("\n--- Human-in-the-loop demo ---")
 	hiloGraph := graph.NewStateGraph(reducer)
 	hiloGraph.MustAddNode("ask_human", func(ctx context.Context, state AgentState) (AgentState, error) {
@@ -300,7 +314,9 @@ func main() {
 		}
 	}
 
+	// -------------------------------------------------------------------------
 	// 8. Parallel branches demo
+	// -------------------------------------------------------------------------
 	fmt.Println("\n--- Parallel branches demo ---")
 	parallelGraph := graph.NewStateGraph(func(cur, upd AgentState) AgentState {
 		cur.Messages = append(cur.Messages, upd.Messages...)

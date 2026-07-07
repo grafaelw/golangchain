@@ -137,12 +137,21 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 	go func() {
 		defer close(ch)
 
+		// Propagate callbacks into context so agent Plan() methods can fire
+		// LLM-level events without holding a direct reference to the manager.
+		// Also inject a root run ID for the executor so nested spans depth correctly.
+		agentCtx := ctx
+		if e.Callbacks != nil {
+			agentCtx = callbacks.WithCallbackManager(ctx, e.Callbacks)
+			agentCtx = callbacks.WithRunID(agentCtx, callbacks.NewRunID())
+		}
+
 		// Build initial messages
 		messages := []schema.Message{schema.NewHumanMessage(input)}
 
 		// Inject memory
 		if e.Memory != nil {
-			vars, err := e.Memory.LoadMemoryVariables(ctx)
+			vars, err := e.Memory.LoadMemoryVariables(agentCtx)
 			if err == nil {
 				if hist, ok := vars["history"]; ok {
 					if histMsgs, ok := hist.([]schema.Message); ok {
@@ -156,7 +165,7 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 
 		for iter := 0; iter < e.MaxIter; iter++ {
 			// Ask the agent what to do next
-			actions, finish, err := e.Agent.Plan(ctx, messages, steps)
+			actions, finish, err := e.Agent.Plan(agentCtx, messages, steps)
 			if err != nil {
 				ch <- AgentEvent{Type: EventError, Err: fmt.Errorf("agent plan iter %d: %w", iter, err)}
 				return
@@ -165,11 +174,11 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 			// Agent decided it's done
 			if finish != nil {
 				if e.Callbacks != nil {
-					e.Callbacks.OnAgentFinish(ctx, *finish)
+					e.Callbacks.OnAgentFinish(agentCtx, *finish)
 				}
 				// Save to memory
 				if e.Memory != nil {
-					_ = e.Memory.SaveContext(ctx, input, finish.Output)
+					_ = e.Memory.SaveContext(agentCtx, input, finish.Output)
 				}
 				ch <- AgentEvent{Type: EventFinalAnswer, Answer: finish.Output}
 				return
@@ -178,19 +187,25 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 			// Execute each action
 			for _, action := range actions {
 				if e.Callbacks != nil {
-					e.Callbacks.OnAgentAction(ctx, action)
+					e.Callbacks.OnAgentAction(agentCtx, action)
 				}
 				if action.Log != "" {
 					ch <- AgentEvent{Type: EventThought, Thought: action.Log}
 				}
 				ch <- AgentEvent{Type: EventToolCall, Action: action}
 
-				observation, toolErr := e.runTool(ctx, action)
+				// Create a tool-level run ID nested under the agent run.
+				toolCtx := agentCtx
+				if e.Callbacks != nil {
+					toolCtx = callbacks.WithRunID(agentCtx, callbacks.NewRunID())
+					e.Callbacks.OnToolStart(toolCtx, action.Tool, action.ToolInput)
+				}
+				observation, toolErr := e.runTool(toolCtx, action)
 				if toolErr != nil {
 					observation = "Error: " + toolErr.Error()
 				}
 				if e.Callbacks != nil {
-					e.Callbacks.OnToolEnd(ctx, action.Tool, observation)
+					e.Callbacks.OnToolEnd(toolCtx, action.Tool, observation)
 				}
 				ch <- AgentEvent{Type: EventToolResult, Observation: observation}
 
@@ -223,9 +238,6 @@ func (e *AgentExecutor) runTool(ctx context.Context, action schema.AgentAction) 
 	t := tools.FindTool(e.Tools, action.Tool)
 	if t == nil {
 		return "", fmt.Errorf("tool %q not found", action.Tool)
-	}
-	if e.Callbacks != nil {
-		e.Callbacks.OnToolStart(ctx, action.Tool, action.ToolInput)
 	}
 	return t.Run(ctx, action.ToolInput)
 }
@@ -269,9 +281,23 @@ func (a *ToolCallingAgent) Plan(ctx context.Context, messages []schema.Message, 
 	toolDefs := tools.ToToolDefs(a.tools)
 	callOpts := append(a.llmOpts, llm.WithTools(toolDefs...))
 
-	gen, err := a.llm.Generate(ctx, msgs, callOpts...)
+	// Fire LLM callbacks if a manager was propagated via context.
+	cm := callbacks.CallbackManagerFromContext(ctx)
+	llmCtx := ctx
+	if cm != nil {
+		llmCtx = callbacks.WithRunID(ctx, callbacks.NewRunID())
+		cm.OnLLMStart(llmCtx, a.llm.ModelName(), msgs)
+	}
+
+	gen, err := a.llm.Generate(llmCtx, msgs, callOpts...)
 	if err != nil {
+		if cm != nil {
+			cm.OnError(llmCtx, "ToolCallingAgent", err)
+		}
 		return nil, nil, fmt.Errorf("ToolCallingAgent: llm: %w", err)
+	}
+	if cm != nil {
+		cm.OnLLMEnd(llmCtx, a.llm.ModelName(), gen)
 	}
 
 	// If the model returned tool calls, convert them to AgentActions
@@ -327,9 +353,23 @@ func (a *ReActAgent) Plan(ctx context.Context, messages []schema.Message, steps 
 		msgs = append(msgs, schema.NewAIMessage(scratchpad))
 	}
 
-	gen, err := a.llm.Generate(ctx, msgs, a.llmOpts...)
+	// Fire LLM callbacks if a manager was propagated via context.
+	cm := callbacks.CallbackManagerFromContext(ctx)
+	llmCtx := ctx
+	if cm != nil {
+		llmCtx = callbacks.WithRunID(ctx, callbacks.NewRunID())
+		cm.OnLLMStart(llmCtx, a.llm.ModelName(), msgs)
+	}
+
+	gen, err := a.llm.Generate(llmCtx, msgs, a.llmOpts...)
 	if err != nil {
+		if cm != nil {
+			cm.OnError(llmCtx, "ReActAgent", err)
+		}
 		return nil, nil, fmt.Errorf("ReActAgent: llm: %w", err)
+	}
+	if cm != nil {
+		cm.OnLLMEnd(llmCtx, a.llm.ModelName(), gen)
 	}
 
 	return parseReActOutput(gen.Text)
