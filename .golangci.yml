@@ -56,20 +56,12 @@ linters:
         - name: unused-parameter
           disabled: true   # too noisy in interface implementations
 
-    goimports:
-      # Keep stdlib / external / internal import groups separated.
-      local-prefixes: github.com/grafaelw/golangchain
-
     staticcheck:
       checks:
         - "all"
         - "-SA1019"   # suppress deprecated-API warnings
 
   exclusions:
-    uniq-by-line: true
-    max-issues-per-linter: 0
-    max-same-issues: 0
-
     rules:
       # Test files get relaxed rules.
       - path: "_test\\.go$"
