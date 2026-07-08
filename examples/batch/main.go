@@ -136,5 +136,3 @@ func section(title string) {
 	fmt.Println(title)
 	fmt.Println(strings.Repeat("─", 72))
 }
-
-

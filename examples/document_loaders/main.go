@@ -239,5 +239,3 @@ func truncate(s string, max int) string {
 	}
 	return s[:max] + "…"
 }
-
-
