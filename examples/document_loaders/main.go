@@ -240,9 +240,4 @@ func truncate(s string, max int) string {
 	return s[:max] + "…"
 }
 
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
+
