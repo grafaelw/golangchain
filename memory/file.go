@@ -3,6 +3,7 @@
 //   - FileChatHistory:     persists a ConversationBufferMemory to disk as JSON.
 //   - VectorStoreMemory:   retrieves the most relevant past turns from a
 //                          vector store (semantic long-term memory).
+
 package memory
 
 import (

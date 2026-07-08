@@ -1,6 +1,7 @@
 // This file adds a FileCheckpointer that persists graph state to disk as
 // JSON files (one directory per thread, one file per checkpoint), suitable
 // for local development and single-node deployments.
+
 package graph
 
 import (

@@ -8,7 +8,7 @@
 //   - embeddings.AzureEmbedder           — real embeddings via Azure OpenAI
 //   - vectorstore.NewInMemoryVectorStore — cosine similarity index
 //   - retriever.NewVectorStoreRetriever + BM25 + Ensemble (RRF)
-//                                         — hybrid retrieval
+//     — hybrid retrieval
 //   - chain.NewRetrievalQAChain          — RAG stuff-prompt
 //   - llmutil.NewCachingLLM              — response memoisation
 //   - eval.Run                           — mini evaluation harness
@@ -99,7 +99,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	files := map[string]string{
 		"go.md":     "# The Go Programming Language\n\nGo (or Golang) was released in 2009 by Google. It is a statically typed, compiled language known for its simplicity and first-class concurrency via goroutines.",
@@ -192,7 +192,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 	cm := callbacks.NewCallbackManager(exporter)
 
 	// -------------------------------------------------------------------------

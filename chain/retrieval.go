@@ -6,6 +6,7 @@
 //   - MapReduceSummarizer:   summarise each chunk in parallel, then reduce.
 //   - RefineSummarizer:      seed a summary and iteratively refine it chunk
 //                            by chunk. Best when order matters.
+
 package chain
 
 import (
@@ -146,12 +147,12 @@ func renderRAGPrompt(tmpl, question string, docs []schema.Document) string {
 //
 // Input to Invoke must be []schema.Document (or []string, converted).
 type MapReduceSummarizer struct {
-	LLM         llm.LLM
-	LLMOptions  []llm.Option
-	MapPrompt   string // must contain {{ .content }}
+	LLM          llm.LLM
+	LLMOptions   []llm.Option
+	MapPrompt    string // must contain {{ .content }}
 	ReducePrompt string // must contain {{ .summaries }}
-	Concurrency int
-	Name        string
+	Concurrency  int
+	Name         string
 }
 
 // DefaultMapPrompt is used to summarise each chunk.
@@ -380,4 +381,3 @@ func toDocuments(input any) ([]schema.Document, error) {
 		return nil, fmt.Errorf("expected []schema.Document, got %T", input)
 	}
 }
-

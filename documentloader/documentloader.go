@@ -96,7 +96,7 @@ func (l *CSVLoader) Load(_ context.Context) ([]schema.Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("documentloader: open %q: %w", l.Path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	r := csv.NewReader(f)
 	if l.Delimiter != 0 {
@@ -264,7 +264,7 @@ func (l *HTTPLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("documentloader: GET %q: %w", l.URL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("documentloader: GET %q: status %d", l.URL, resp.StatusCode)
 	}

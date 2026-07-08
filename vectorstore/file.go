@@ -2,6 +2,7 @@
 // contents to a JSON file on disk. It is intended for local development
 // and single-node deployments; for production workloads consider a
 // dedicated engine (Qdrant, pgvector, Weaviate, …).
+
 package vectorstore
 
 import (

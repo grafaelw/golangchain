@@ -39,7 +39,7 @@ func LoadJSONL(path string) (Dataset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("eval: open %q: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := json.NewDecoder(f)
 	var out Dataset
@@ -61,7 +61,7 @@ func (d Dataset) SaveJSONL(path string) error {
 	if err != nil {
 		return fmt.Errorf("eval: create %q: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	for _, ex := range d {
 		if err := enc.Encode(ex); err != nil {

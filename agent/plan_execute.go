@@ -8,6 +8,7 @@
 // PlanAndExecute is a good fit for multi-step research and complex tasks
 // where a single ReAct loop meanders. It composes with the same
 // AgentExecutor as ReAct/ToolCalling agents.
+
 package agent
 
 import (
@@ -28,12 +29,12 @@ import (
 // PlanAndExecuteAgent is a two-stage agent: a planner produces steps, then
 // an inner executor performs them.
 type PlanAndExecuteAgent struct {
-	Planner      llm.LLM
-	Executor     Agent // typically a ToolCallingAgent or ReActAgent
-	Tools        []tools.Tool
+	Planner       llm.LLM
+	Executor      Agent // typically a ToolCallingAgent or ReActAgent
+	Tools         []tools.Tool
 	PlannerPrompt string // must contain {{ .objective }} and {{ .tools }}
-	StepPrompt   string // must contain {{ .step }}, {{ .objective }}, {{ .prior }}
-	LLMOptions   []llm.Option
+	StepPrompt    string // must contain {{ .step }}, {{ .objective }}, {{ .prior }}
+	LLMOptions    []llm.Option
 
 	// Populated after Plan; also emitted as thoughts in the AgentExecutor stream.
 	plannedSteps []string

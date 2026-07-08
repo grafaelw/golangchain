@@ -146,7 +146,7 @@ func (c *CachingLLM) Stream(ctx context.Context, messages []schema.Message, opts
 // and options (options are hashed by their JSON representation via a helper).
 func hashCall(model string, msgs []schema.Message, opts []llm.Option) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "model=%s\n", model)
+	_, _ = fmt.Fprintf(h, "model=%s\n", model)
 	if data, err := json.Marshal(msgs); err == nil {
 		h.Write(data)
 	}
@@ -154,7 +154,7 @@ func hashCall(model string, msgs []schema.Message, opts []llm.Option) string {
 	// %p addresses. Users who need stable-across-run keys should pass
 	// deterministic options (which is normal in most apps).
 	for i, o := range opts {
-		fmt.Fprintf(h, "\nopt[%d]=%p", i, o)
+		_, _ = fmt.Fprintf(h, "\nopt[%d]=%p", i, o)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

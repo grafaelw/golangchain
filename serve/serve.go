@@ -254,5 +254,5 @@ func prepareSSE(w http.ResponseWriter) {
 
 func writeSSE(w http.ResponseWriter, event string, data any) {
 	payload, _ := json.Marshal(data)
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, payload)
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, payload)
 }
