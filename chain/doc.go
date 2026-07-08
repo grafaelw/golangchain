@@ -18,12 +18,15 @@
 //
 // # Chain types
 //
-//   - [FuncRunnable]     — wraps any func(ctx, any) (any, error)
-//   - [LLMRunnable]      — wraps an llm.LLM for use inside a Pipe
-//   - [LLMChain]         — prompt → LLM → output parser (the canonical chain)
-//   - [SequentialChain]  — threads output of step N as input to step N+1
-//   - [MapChain]         — fans input to multiple branches in parallel
-//   - [RouterChain]      — picks one sub-chain based on a routing function
+//   - [FuncRunnable]         — wraps any func(ctx, any) (any, error)
+//   - [LLMRunnable]          — wraps an llm.LLM for use inside a Pipe
+//   - [LLMChain]             — prompt → LLM → output parser (canonical chain)
+//   - [SequentialChain]      — threads output of step N as input to step N+1
+//   - [MapChain]             — fans input to multiple branches in parallel
+//   - [RouterChain]          — picks one sub-chain based on a routing function
+//   - [RetrievalQAChain]     — retrieval-augmented QA over a retriever.Retriever
+//   - [MapReduceSummarizer]  — parallel per-chunk summaries, then a reduce step
+//   - [RefineSummarizer]     — ordered, iterative refinement of a running summary
 //
 // # LLMChain example
 //

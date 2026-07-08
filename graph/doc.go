@@ -6,12 +6,14 @@
 //
 // # Core concepts
 //
-//   - [StateGraph][S]     — mutable builder; not thread-safe during construction
-//   - [CompiledGraph][S]  — immutable, thread-safe, executable graph
-//   - [NodeFunc][S]       — func(ctx, state S) (S, error)
-//   - [StateReducer][S]   — func(current, update S) S — merges partial updates
-//   - [Checkpointer][S]   — interface for persisting and loading graph state
-//   - [Interrupt]         — sentinel error returned by a node to pause execution
+//   - [StateGraph][S]        — mutable builder; not thread-safe during construction.
+//   - [CompiledGraph][S]     — immutable, thread-safe, executable graph.
+//   - [NodeFunc][S]          — func(ctx, state S) (S, error).
+//   - [StateReducer][S]      — func(current, update S) S — merges partial updates.
+//   - [Checkpointer][S]      — interface for persisting and loading graph state.
+//     Ships with [MemoryCheckpointer] (in-process) and [FileCheckpointer]
+//     (one JSON file per checkpoint under a directory, chronological).
+//   - [Interrupt]            — sentinel error returned by a node to pause execution.
 //
 // # Edges
 //

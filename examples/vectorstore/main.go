@@ -8,10 +8,31 @@
 //   - RetrieverTool            — wraps a VectorStore as a Tool, so an agent
 //     can call it like any other tool
 //
-// Usage:
+// # Usage — Azure AI Foundry (default)
 //
-//	Put OPENAI_KEY, OPENAI_ENDPOINT, OPENAI_EMBEDDING_DEPLOYMENT and
-//	OPENAI_API_VERSION in a .env file, then: go run ./examples/vectorstore
+// Create a .env file with:
+//
+//	OPENAI_KEY=<azure-api-key>
+//	OPENAI_ENDPOINT=https://<resource>.cognitiveservices.azure.com
+//	OPENAI_EMBEDDING_DEPLOYMENT=<deployment-name>
+//	OPENAI_API_VERSION=2024-02-01
+//
+// Then run:
+//
+//	go run ./examples/vectorstore
+//
+// # Usage — OpenAI API
+//
+// Replace the embedder initialisation block with:
+//
+//	embedder, err := embeddings.NewOpenAIEmbedder(
+//	    os.Getenv("OPENAI_API_KEY"),
+//	    "text-embedding-3-small",
+//	)
+//
+// Create a .env file with:
+//
+//	OPENAI_API_KEY=sk-...
 package main
 
 import (
@@ -53,11 +74,20 @@ func main() {
 	}
 
 	// -------------------------------------------------------------------------
-	// 2. Create the embedder
+	// 2. Create the embedder — Azure OpenAI via AzureEmbedder.
+	//
+	// To use the OpenAI API instead, replace this block with:
+	//
+	//     embedder, err := embeddings.NewOpenAIEmbedder(
+	//         os.Getenv("OPENAI_API_KEY"),
+	//         "text-embedding-3-small",
+	//     )
+	//
+	// and set OPENAI_API_KEY in your .env.
 	// -------------------------------------------------------------------------
 	embedder, err := embeddings.NewAzureEmbedder(
-		os.Getenv("OPENAI_KEY"),
-		resourceOrigin(os.Getenv("OPENAI_ENDPOINT")),
+		os.Getenv("AZURE_OPENAI_API_KEY"),
+		resourceOrigin(os.Getenv("AZURE_OPENAI_ENDPOINT")),
 		os.Getenv("OPENAI_EMBEDDING_DEPLOYMENT"),
 		os.Getenv("OPENAI_API_VERSION"),
 	)

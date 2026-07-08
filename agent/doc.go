@@ -5,9 +5,14 @@
 //
 // # Agent strategies
 //
-//   - [ReActAgent] — text-based Thought/Action/Observation loop; works with any LLM
-//   - [ToolCallingAgent] — uses the model's native function/tool-calling API;
-//     requires a model that supports tool_calls (GPT-4o, Claude 3+, Gemini 1.5+)
+//   - [ReActAgent]         — text-based Thought/Action/Observation loop;
+//     works with any LLM.
+//   - [ToolCallingAgent]   — uses the model's native function/tool-calling API;
+//     requires a model that supports tool_calls (GPT-4o, Claude 3+, Gemini 1.5+).
+//   - [PlanAndExecuteAgent] — two-stage: a planner LLM produces an ordered
+//     list of steps, then an inner executor agent tackles them one at a time.
+//     Prefer this for multi-step research tasks where a single ReAct loop
+//     meanders.
 //
 // # AgentExecutor
 //

@@ -3,8 +3,25 @@
 A production-grade **LangChain + LangGraph equivalent library for Go**.
 
 Composable LLM chains, tool-using agents, conversation memory, vector stores,
-and a fully generic StateGraph engine — all idiomatic Go, no code generation,
-no reflection magic.
+retrievers, document loaders, text splitters, an evaluation harness, LangServe-
+like HTTP serving, JSON-lines tracing, and a fully generic StateGraph engine —
+all idiomatic Go, no code generation, no reflection magic.
+
+### What's included
+
+| Area | Packages |
+|---|---|
+| Core | `schema`, `prompt`, `output`, `chain`, `callbacks`, `tracing` |
+| LLM providers | `llm/{openai,azure,anthropic,gemini,ollama,openaicompat}` |
+| LLM production wrappers | `llmutil` — cache (memory + file), retry with backoff, rate limiter |
+| Agents | `agent` — ReAct, ToolCalling, PlanAndExecute |
+| RAG stack | `documentloader`, `textsplitter`, `embeddings`, `vectorstore` (in-memory + file), `retriever` (BM25, ensemble/RRF, multi-query, contextual compression) |
+| Chains | LLM, Sequential, Map, Router, **RetrievalQA**, **MapReduce/Refine summarizers** |
+| Memory | Buffer, Window, Summary, **File (persistent)**, **VectorStore (semantic)** |
+| Graph | Generic `StateGraph[S]` with cycles, conditional/parallel edges, interrupts, and both `MemoryCheckpointer` and **`FileCheckpointer`** |
+| Evaluation | `eval` — Dataset (JSONL), Runner, evaluators: ExactMatch, Contains, Regex, JSONEqual, LLMAsJudge |
+| Serving | `serve` — LangServe-style HTTP handlers for any Runnable, AgentExecutor, or CompiledGraph (JSON + SSE) |
+| Observability | `tracing` — in-memory tree, pretty terminal handler, **JSON-lines exporter** + **FeedbackStore** |
 
 ## Install
 
@@ -15,6 +32,17 @@ go get github.com/grafaelw/golangchain
 Requires **Go 1.21+** (generics).
 
 ## Quick start
+
+The examples in this repo run against **Azure AI Foundry** (Azure OpenAI
+Service) using the `llm/openai` package with a custom `WithBaseURL`. If you
+have a plain **OpenAI API key** instead, the only change is two lines — see the
+comments in each example.
+
+**Azure AI Foundry** — create a `.env` file:
+
+```
+AZURE_OPENAI_API_KEY=<your-key>
+```
 
 ```go
 import (
@@ -31,9 +59,11 @@ import (
 func main() {
     ctx := context.Background()
 
+    // Azure AI Foundry endpoint — openai package with a custom base URL.
     model, _ := openai.New(
-        openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+        openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
         openai.WithModel("gpt-4o-mini"),
+        openai.WithBaseURL("https://<resource>.services.ai.azure.com/openai/v1/"),
     )
 
     tmpl := prompt.MustNewChatPromptTemplate(
@@ -48,39 +78,72 @@ func main() {
 }
 ```
 
+**OpenAI API** — swap the model initialisation; everything else stays the same:
+
+```go
+// Create a .env with: OPENAI_API_KEY=sk-...
+model, _ := openai.New(
+    openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+    openai.WithModel("gpt-4o-mini"),
+    // no WithBaseURL — defaults to api.openai.com
+)
+```
+
 ## Packages
 
 | Package | Purpose |
 |---|---|
 | `schema` | Shared types: `Message`, `Document`, `ToolCall`, `Generation`, `StreamChunk` |
 | `llm` | `LLM` interface + functional call options |
-| `llm/openai` | OpenAI Chat Completions |
-| `llm/azure` | Azure OpenAI Service |
+| `llm/openai` | OpenAI Chat Completions — also works with Azure AI Foundry via `WithBaseURL` |
+| `llm/azure` | Azure OpenAI Service (Azure SDK, separate from `llm/openai`) |
 | `llm/anthropic` | Anthropic Claude |
 | `llm/gemini` | Google Gemini |
 | `llm/ollama` | Local Ollama server |
 | `llm/openaicompat` | Any OpenAI-schema server (vLLM, LM Studio, llama.cpp …) |
+| `llmutil` | LLM wrappers: `CachingLLM`, `RetryingLLM`, `RateLimitedLLM`; `MemoryCache`, `FileCache` |
 | `prompt` | `PromptTemplate`, `ChatPromptTemplate`, `FewShotPromptTemplate` |
 | `output` | Typed parsers: `Str`, `JSON`, `Struct[T]`, `List`, `Bool` |
-| `chain` | `Runnable` / `Pipe`, `LLMChain`, `SequentialChain`, `MapChain`, `RouterChain` |
-| `memory` | `ConversationBufferMemory`, `ConversationWindowMemory`, `ConversationSummaryMemory` |
+| `chain` | `Runnable` / `Pipe`, `LLMChain`, `SequentialChain`, `MapChain`, `RouterChain`, `RetrievalQAChain`, `MapReduceSummarizer`, `RefineSummarizer` |
+| `memory` | `ConversationBufferMemory`, `ConversationWindowMemory`, `ConversationSummaryMemory`, `FileChatHistory`, `VectorStoreMemory` |
 | `tools` | `Tool` interface, `Calculator`, `HTTPFetch`, `DuckDuckGoSearch`, `ShellTool`, `FuncTool` |
-| `agent` | `ReActAgent`, `ToolCallingAgent`, `AgentExecutor`, streaming `AgentEvent` |
+| `agent` | `ReActAgent`, `ToolCallingAgent`, `PlanAndExecuteAgent`, `AgentExecutor`, streaming `AgentEvent` |
 | `embeddings` | `Embedder` interface, `OpenAIEmbedder`, `AzureEmbedder` |
-| `vectorstore` | `VectorStore` interface, `InMemoryVectorStore` (cosine similarity), `RetrieverTool` |
+| `textsplitter` | `CharacterSplitter`, `RecursiveCharacterSplitter`, `MarkdownSplitter` |
+| `documentloader` | `TextLoader`, `MarkdownLoader`, `CSVLoader`, `HTMLLoader`, `HTTPLoader`, `DirectoryLoader` |
+| `vectorstore` | `VectorStore` interface, `InMemoryVectorStore`, `FileVectorStore`, `RetrieverTool` |
+| `retriever` | `Retriever` interface, `VectorStoreRetriever`, `BM25Retriever`, `EnsembleRetriever` (RRF), `MultiQueryRetriever`, `ContextualCompressionRetriever` |
 | `callbacks` | `Handler` interface, `CallbackManager` fan-out, `LoggingHandler` |
-| `graph` | `StateGraph[S]`, `CompiledGraph[S]`, `Interrupt`, `MemoryCheckpointer[S]` |
+| `tracing` | In-memory `Tracer`, `PrettyHandler`, `JSONLinesExporter`, `FeedbackStore` |
+| `eval` | `Dataset` (JSONL), `Run`, evaluators: `ExactMatch`, `Contains`, `Regex`, `JSONEqual`, `LLMAsJudge` |
+| `graph` | `StateGraph[S]`, `CompiledGraph[S]`, `Interrupt`, `MemoryCheckpointer[S]`, `FileCheckpointer[S]` |
+| `serve` | LangServe-style HTTP handlers for any `Runnable`, `AgentExecutor`, or `CompiledGraph` |
 
 ## LLM providers
 
-```go
-// OpenAI
-model, _ := openai.New(openai.WithAPIKey(key), openai.WithModel("gpt-4o"))
+All examples use **Azure AI Foundry** via the `llm/openai` package with
+`WithBaseURL`. To switch to a different provider, only the model initialisation
+changes — all chains, agents, and graphs are provider-agnostic.
 
-// Azure OpenAI
+```go
+// Azure AI Foundry (used in the examples — env: AZURE_OPENAI_API_KEY)
+model, _ := openai.New(
+    openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
+    openai.WithModel("gpt-4o-mini"),
+    openai.WithBaseURL("https://<resource>.services.ai.azure.com/openai/v1/"),
+)
+
+// OpenAI API (env: OPENAI_API_KEY)
+model, _ := openai.New(
+    openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+    openai.WithModel("gpt-4o-mini"),
+    // no WithBaseURL — defaults to api.openai.com
+)
+
+// Azure OpenAI Service (dedicated Azure SDK, env: AZURE_OPENAI_API_KEY)
 model, _ := azure.New(
-    azure.WithAPIKey(key),
-    azure.WithEndpoint(endpoint),
+    azure.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
+    azure.WithEndpoint(os.Getenv("AZURE_OPENAI_ENDPOINT")),
     azure.WithDeployment("gpt-4o"),
 )
 
@@ -93,7 +156,7 @@ model, _ := gemini.New(ctx, gemini.WithAPIKey(key), gemini.WithModel("gemini-2.0
 // Local Ollama
 model, _ := ollama.New(ollama.WithModel("llama3.2"))
 
-// Any OpenAI-compatible server
+// Any OpenAI-compatible server (vLLM, LM Studio, llama.cpp …)
 model, _ := openaicompat.New(openaicompat.WithBaseURL("http://localhost:1234/v1"), openaicompat.WithModel("mistral"))
 ```
 
@@ -274,7 +337,17 @@ agent.NewAgentExecutor(myAgent, tools, agent.WithCallbackManager(cm))
 ## Vector store (RAG)
 
 ```go
-embedder, _ := embeddings.NewOpenAIEmbedder(os.Getenv("OPENAI_API_KEY"))
+// Azure embeddings (used in the examples)
+embedder, _ := embeddings.NewAzureEmbedder(
+    os.Getenv("OPENAI_KEY"),
+    "https://<resource>.cognitiveservices.azure.com",
+    os.Getenv("OPENAI_EMBEDDING_DEPLOYMENT"),
+    os.Getenv("OPENAI_API_VERSION"),
+)
+
+// OpenAI embeddings alternative
+embedder, _ := embeddings.NewOpenAIEmbedder(os.Getenv("OPENAI_API_KEY"), "text-embedding-3-small")
+
 store := vectorstore.NewInMemoryVectorStore(embedder)
 
 _ = store.AddDocuments(ctx, []schema.Document{
@@ -306,19 +379,53 @@ executor  := agent.NewAgentExecutor(myAgent, []tools.Tool{retriever})
 | Example | Description |
 |---|---|
 | [`examples/simple_chain`](examples/simple_chain/main.go) | LCEL pipeline + memory + streaming |
-| [`examples/react_agent`](examples/react_agent/main.go) | Tool-calling agent with streaming events |
-| [`examples/state_graph`](examples/state_graph/main.go) | LangGraph-style StateGraph with checkpointing and human-in-the-loop |
 | [`examples/chains`](examples/chains/main.go) | LCEL Runnables (FuncRunnable, Sequential/Map/Router chains) + output parsers |
 | [`examples/memory_and_tools`](examples/memory_and_tools/main.go) | Buffer/Window/Summary memory + Calculator/FuncTool |
+| [`examples/react_agent`](examples/react_agent/main.go) | Tool-calling agent with streaming events |
+| [`examples/state_graph`](examples/state_graph/main.go) | LangGraph-style StateGraph with checkpointing and human-in-the-loop |
 | [`examples/vectorstore`](examples/vectorstore/main.go) | Embeddings + InMemoryVectorStore + RetrieverTool |
+| [`examples/tracing`](examples/tracing/main.go) | LangSmith-style tracing with PrettyHandler + in-memory run tree |
+| [`examples/rag`](examples/rag/main.go) | Full RAG pipeline: loader → splitter → hybrid retriever → QA chain + eval |
 
-Run any example:
+All examples use **Azure AI Foundry** by default. Every file contains a
+clearly marked comment block showing the two-line swap for the **OpenAI API**.
+
+**Azure AI Foundry** (most examples):
 
 ```bash
-OPENAI_API_KEY=sk-... go run ./examples/simple_chain
-OPENAI_API_KEY=sk-... go run ./examples/chains
-OPENAI_API_KEY=sk-... go run ./examples/memory_and_tools
-OPENAI_API_KEY=sk-... go run ./examples/vectorstore
+# .env
+AZURE_OPENAI_API_KEY=<your-key>
+
+go run ./examples/simple_chain
+go run ./examples/chains
+go run ./examples/memory_and_tools
+go run ./examples/react_agent
+go run ./examples/state_graph
+go run ./examples/tracing
+```
+
+**OpenAI API** — same commands; just change the model block in the file:
+
+```go
+// Replace the "2. Create the LLM" block in any example with:
+model, err := openai.New(
+    openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+    openai.WithModel("gpt-4o-mini"),
+)
+// and set OPENAI_API_KEY=sk-... in your .env
+```
+
+**Embeddings examples** (`vectorstore`, `rag`) need additional env vars:
+
+```bash
+# Azure embeddings (.env)
+OPENAI_KEY=<azure-api-key>
+OPENAI_ENDPOINT=https://<resource>.cognitiveservices.azure.com
+OPENAI_EMBEDDING_DEPLOYMENT=<deployment-name>
+OPENAI_API_VERSION=2024-02-01
+
+# OpenAI embeddings alternative — replace the embedder block with:
+# embedder, err := embeddings.NewOpenAIEmbedder(os.Getenv("OPENAI_API_KEY"), "text-embedding-3-small")
 ```
 
 ## License

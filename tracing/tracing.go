@@ -1,6 +1,6 @@
 // Package tracing provides LangSmith-inspired observability for golangchain.
 //
-// It ships two ready-made callbacks.Handler implementations:
+// It ships four ready-made callbacks.Handler implementations:
 //
 //   - [TracerHandler] — records every run (LLM call, chain, tool, graph node)
 //     into an in-memory tree of [Run] objects. Use [Tracer.Runs] to inspect
@@ -10,6 +10,14 @@
 //   - [PrettyHandler] — writes a live, colour-coded trace to any io.Writer
 //     (typically os.Stderr) as operations execute, giving a terminal
 //     experience similar to LangSmith's run view.
+//
+//   - [JSONLinesExporter] — writes one JSON [Event] per line to any
+//     io.Writer or file. Ideal for shipping traces into jq, Loki,
+//     ClickHouse, DuckDB, or an OpenTelemetry collector's file receiver.
+//     Use [NewFileJSONLinesExporter] for append-only file logging.
+//
+// A [FeedbackStore] is also provided for capturing user- or evaluator-supplied
+// [Feedback] records keyed by run ID, mirroring LangSmith's Feedback API.
 //
 // Quick-start:
 //
@@ -21,6 +29,7 @@
 //
 //	cb := callbacks.NewCallbackManager(
 //	    tracing.NewPrettyHandler(os.Stderr),   // live output
+//	    tracing.NewJSONLinesExporter(logFile), // structured, per-line
 //	)
 //
 //	// — or — record programmatically:

@@ -13,7 +13,10 @@
 // # Implementations
 //
 //   - [InMemoryVectorStore] — cosine similarity over an in-memory slice;
-//     suitable for prototyping and corpora up to ~100k documents
+//     suitable for prototyping and corpora up to ~100k documents.
+//   - [FileVectorStore]     — InMemoryVectorStore backed by a JSON file on
+//     disk; AddDocuments and Delete auto-persist. Cached vectors are reloaded
+//     on open, avoiding a re-embed on restart.
 //
 // # RetrieverTool
 //

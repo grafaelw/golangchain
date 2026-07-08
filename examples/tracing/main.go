@@ -18,9 +18,28 @@
 //   - Scenario B: ToolCallingAgent  (Agent → LLM → Tool → LLM → …)
 //   - Scenario C: StateGraph        (Graph Node → LLM, Graph Node → LLM)
 //
-// Usage:
+// # Usage — Azure AI Foundry (default)
 //
-//	OPENAI_API_KEY=sk-... go run ./examples/tracing/
+// Create a .env file with:
+//
+//	AZURE_OPENAI_API_KEY=<your-key>
+//
+// Then run:
+//
+//	go run ./examples/tracing
+//
+// # Usage — OpenAI API
+//
+// Replace the model initialisation block with:
+//
+//	model, err := openai.New(
+//	    openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+//	    openai.WithModel("gpt-4o-mini"),
+//	)
+//
+// Create a .env file with:
+//
+//	OPENAI_API_KEY=sk-...
 package main
 
 import (
@@ -55,7 +74,16 @@ func main() {
 	}
 
 	// -------------------------------------------------------------------------
-	// 2. Build the LLM
+	// 2. Build the LLM — Azure AI Foundry via the openai package.
+	//
+	// To use the OpenAI API instead, replace this block with:
+	//
+	//     model, err := openai.New(
+	//         openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+	//         openai.WithModel("gpt-4o-mini"),
+	//     )
+	//
+	// and set OPENAI_API_KEY in your .env.
 	// -------------------------------------------------------------------------
 	model, err := openai.New(
 		openai.WithAPIKey(os.Getenv("AZURE_OPENAI_API_KEY")),
