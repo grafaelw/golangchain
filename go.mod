@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/anthropics/anthropic-sdk-go v1.56.0
 	github.com/joho/godotenv v1.5.1
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/openai/openai-go v1.12.0
 	google.golang.org/genai v1.62.0
 )

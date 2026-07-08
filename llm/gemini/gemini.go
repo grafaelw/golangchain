@@ -3,6 +3,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -76,7 +77,8 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 		return nil, fmt.Errorf("gemini: generate: %w", err)
 	}
 
-	text := extractText(resp)
+	text, toolCalls := extractGeminiContent(resp)
+	msg := schema.Message{Role: schema.RoleAI, Content: text, ToolCalls: toolCalls}
 	usage := schema.TokenUsage{}
 	if resp.UsageMetadata != nil {
 		usage.PromptTokens = int(resp.UsageMetadata.PromptTokenCount)
@@ -85,7 +87,7 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 	}
 	return &schema.Generation{
 		Text:    text,
-		Message: schema.Message{Role: schema.RoleAI, Content: text},
+		Message: msg,
 		Usage:   usage,
 	}, nil
 }
@@ -109,7 +111,26 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 				ch <- schema.StreamChunk{Err: fmt.Errorf("gemini: stream: %w", err)}
 				return
 			}
-			ch <- schema.StreamChunk{Text: extractText(resp)}
+			for _, cand := range resp.Candidates {
+				if cand.Content == nil {
+					continue
+				}
+				for _, part := range cand.Content.Parts {
+					if part.Text != "" {
+						ch <- schema.StreamChunk{Text: part.Text}
+					}
+					if part.FunctionCall != nil {
+						args, _ := json.Marshal(part.FunctionCall.Args)
+						ch <- schema.StreamChunk{
+							ToolCallDelta: &schema.ToolCallDelta{
+								ID:        part.FunctionCall.ID,
+								Name:      part.FunctionCall.Name,
+								Arguments: string(args),
+							},
+						}
+					}
+				}
+			}
 		}
 		ch <- schema.StreamChunk{Done: true}
 	}()
@@ -134,9 +155,21 @@ func toGeminiRequest(msgs []schema.Message, o llm.Options) ([]*genai.Content, *g
 				[]*genai.Part{genai.NewPartFromText(m.Content)}, genai.RoleUser,
 			))
 		case schema.RoleAI:
-			contents = append(contents, genai.NewContentFromParts(
-				[]*genai.Part{genai.NewPartFromText(m.Content)}, genai.RoleModel,
-			))
+			parts := buildAIParts(m)
+			contents = append(contents, genai.NewContentFromParts(parts, genai.RoleModel))
+		case schema.RoleTool:
+			if m.ToolCallID != "" {
+				name := extractToolName(msgs, m.ToolCallID)
+				resp := map[string]any{}
+				if strings.TrimSpace(m.Content) != "" {
+					if err := json.Unmarshal([]byte(m.Content), &resp); err != nil {
+						resp = map[string]any{"output": m.Content}
+					}
+				}
+				contents = append(contents, genai.NewContentFromFunctionResponse(
+					name, resp, genai.RoleUser,
+				))
+			}
 		}
 	}
 
@@ -159,24 +192,109 @@ func toGeminiRequest(msgs []schema.Message, o llm.Options) ([]*genai.Content, *g
 	if len(o.StopSequences) > 0 {
 		cfg.StopSequences = o.StopSequences
 	}
+	if len(o.Tools) > 0 {
+		cfg.Tools = append(cfg.Tools, toGeminiTool(o.Tools))
+	}
+	if o.ToolChoice != "" {
+		cfg.ToolConfig = toGeminiToolConfig(o.ToolChoice)
+	}
 
 	return contents, cfg
 }
 
-func extractText(resp *genai.GenerateContentResponse) string {
-	if resp == nil {
-		return ""
+func buildAIParts(m schema.Message) []*genai.Part {
+	var parts []*genai.Part
+	if m.Content != "" {
+		parts = append(parts, genai.NewPartFromText(m.Content))
 	}
-	var sb strings.Builder
+	for _, tc := range m.ToolCalls {
+		parts = append(parts, genai.NewPartFromFunctionCall(tc.Name, parseToolArgs(tc.Arguments)))
+	}
+	return parts
+}
+
+func extractToolName(msgs []schema.Message, toolCallID string) string {
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			if tc.ID == toolCallID {
+				return tc.Name
+			}
+		}
+	}
+	return ""
+}
+
+func parseToolArgs(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return map[string]any{}
+	}
+	return args
+}
+
+func extractGeminiContent(resp *genai.GenerateContentResponse) (string, []schema.ToolCall) {
+	if resp == nil {
+		return "", nil
+	}
+	var text strings.Builder
+	var toolCalls []schema.ToolCall
 	for _, cand := range resp.Candidates {
 		if cand.Content == nil {
 			continue
 		}
 		for _, part := range cand.Content.Parts {
 			if part.Text != "" {
-				sb.WriteString(part.Text)
+				text.WriteString(part.Text)
+			}
+			if part.FunctionCall != nil {
+				args, _ := json.Marshal(part.FunctionCall.Args)
+				toolCalls = append(toolCalls, schema.ToolCall{
+					ID:        part.FunctionCall.ID,
+					Name:      part.FunctionCall.Name,
+					Arguments: args,
+				})
 			}
 		}
 	}
-	return sb.String()
+	return text.String(), toolCalls
+}
+
+func toGeminiTool(toolDefs []schema.ToolDef) *genai.Tool {
+	var decls []*genai.FunctionDeclaration
+	for _, td := range toolDefs {
+		decl := &genai.FunctionDeclaration{
+			Name:        td.Name,
+			Description: td.Description,
+		}
+		if len(td.Parameters) > 0 {
+			var params map[string]any
+			if err := json.Unmarshal(td.Parameters, &params); err == nil {
+				decl.ParametersJsonSchema = params
+			}
+		}
+		decls = append(decls, decl)
+	}
+	return &genai.Tool{FunctionDeclarations: decls}
+}
+
+func toGeminiToolConfig(choice string) *genai.ToolConfig {
+	config := &genai.ToolConfig{}
+	switch choice {
+	case "auto":
+		config.FunctionCallingConfig = &genai.FunctionCallingConfig{
+			Mode: genai.FunctionCallingConfigModeAuto,
+		}
+	case "any", "required":
+		config.FunctionCallingConfig = &genai.FunctionCallingConfig{
+			Mode: genai.FunctionCallingConfigModeAny,
+		}
+	case "none":
+		config.FunctionCallingConfig = &genai.FunctionCallingConfig{
+			Mode: genai.FunctionCallingConfigModeNone,
+		}
+	}
+	return config
 }

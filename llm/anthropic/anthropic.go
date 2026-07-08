@@ -3,6 +3,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -91,16 +92,23 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 	if o.TopP != nil {
 		params.TopP = anthropicsdk.Float(*o.TopP)
 	}
+	for _, td := range o.Tools {
+		params.Tools = append(params.Tools, toAnthropicTool(td))
+	}
+	if o.ToolChoice != "" {
+		params.ToolChoice = toAnthropicToolChoice(o.ToolChoice)
+	}
 
 	resp, err := l.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: generate: %w", err)
 	}
 
-	text := extractText(resp.Content)
+	text, toolCalls := extractContent(resp.Content)
+	msg := schema.Message{Role: schema.RoleAI, Content: text, ToolCalls: toolCalls}
 	return &schema.Generation{
 		Text:       text,
-		Message:    schema.Message{Role: schema.RoleAI, Content: text},
+		Message:    msg,
 		StopReason: string(resp.StopReason),
 		Usage: schema.TokenUsage{
 			PromptTokens:     int(resp.Usage.InputTokens),
@@ -110,7 +118,7 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 	}, nil
 }
 
-// Stream performs a streaming Messages API call.
+// Stream performs a streaming Messages API call with support for tool calls.
 func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm.Option) (<-chan schema.StreamChunk, error) {
 	o := llm.Apply(opts)
 	model := l.cfg.model
@@ -135,21 +143,58 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 	if o.Temperature != nil {
 		params.Temperature = anthropicsdk.Float(*o.Temperature)
 	}
+	for _, td := range o.Tools {
+		params.Tools = append(params.Tools, toAnthropicTool(td))
+	}
+	if o.ToolChoice != "" {
+		params.ToolChoice = toAnthropicToolChoice(o.ToolChoice)
+	}
 
 	stream := l.client.Messages.NewStreaming(ctx, params)
 
 	ch := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(ch)
+		type accum struct {
+			id   string
+			name string
+			buf  strings.Builder
+		}
+		toolAccum := map[int]*accum{}
+		blockIdx := 0
 		for stream.Next() {
 			event := stream.Current()
-			// event.Type is a string: "content_block_delta", "message_stop", etc.
 			switch event.Type {
+			case "content_block_start":
+				if event.ContentBlock.Type == "tool_use" {
+					toolAccum[blockIdx] = &accum{
+						id:   event.ContentBlock.ID,
+						name: event.ContentBlock.Name,
+					}
+				}
 			case "content_block_delta":
 				if event.Delta.Type == "text_delta" {
 					ch <- schema.StreamChunk{Text: event.Delta.Text}
+				} else if event.Delta.Type == "input_json_delta" && event.Delta.PartialJSON != "" {
+					if a, ok := toolAccum[blockIdx]; ok {
+						a.buf.WriteString(event.Delta.PartialJSON)
+					}
 				}
+			case "content_block_stop":
+				blockIdx++
 			case "message_stop":
+				if len(toolAccum) > 0 {
+					delta := schema.ToolCallDelta{}
+					for i := 0; i < len(toolAccum); i++ {
+						if tc, ok := toolAccum[i]; ok {
+							delta.Index = i
+							delta.ID = tc.id
+							delta.Name = tc.name
+							delta.Arguments = tc.buf.String()
+						}
+					}
+					ch <- schema.StreamChunk{ToolCallDelta: &delta}
+				}
 				ch <- schema.StreamChunk{Done: true}
 				return
 			}
@@ -158,7 +203,6 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 			ch <- schema.StreamChunk{Err: fmt.Errorf("anthropic: stream: %w", err)}
 		}
 	}()
-
 	return ch, nil
 }
 
@@ -180,8 +224,11 @@ func splitMessages(msgs []schema.Message) (system string, out []anthropicsdk.Mes
 				anthropicsdk.NewTextBlock(m.Content),
 			))
 		case schema.RoleAI:
-			out = append(out, anthropicsdk.NewAssistantMessage(
-				anthropicsdk.NewTextBlock(m.Content),
+			blocks := buildAssistantBlocks(m)
+			out = append(out, anthropicsdk.NewAssistantMessage(blocks...))
+		case schema.RoleTool:
+			out = append(out, anthropicsdk.NewUserMessage(
+				anthropicsdk.NewToolResultBlock(m.ToolCallID, m.Content, false),
 			))
 		}
 	}
@@ -189,12 +236,90 @@ func splitMessages(msgs []schema.Message) (system string, out []anthropicsdk.Mes
 	return
 }
 
-func extractText(blocks []anthropicsdk.ContentBlockUnion) string {
-	var sb strings.Builder
+func buildAssistantBlocks(m schema.Message) []anthropicsdk.ContentBlockParamUnion {
+	var blocks []anthropicsdk.ContentBlockParamUnion
+	if m.Content != "" {
+		blocks = append(blocks, anthropicsdk.NewTextBlock(m.Content))
+	}
+	for _, tc := range m.ToolCalls {
+		var input any
+		if len(tc.Arguments) > 0 {
+			_ = json.Unmarshal(tc.Arguments, &input)
+		}
+		if input == nil {
+			input = map[string]any{}
+		}
+		blocks = append(blocks, anthropicsdk.NewToolUseBlock(tc.ID, input, tc.Name))
+	}
+	return blocks
+}
+
+func extractContent(blocks []anthropicsdk.ContentBlockUnion) (string, []schema.ToolCall) {
+	var text strings.Builder
+	var toolCalls []schema.ToolCall
 	for _, b := range blocks {
-		if b.Type == "text" {
-			sb.WriteString(b.Text)
+		switch b.Type {
+		case "text":
+			text.WriteString(b.Text)
+		case "tool_use":
+			tb := b.AsToolUse()
+			toolCalls = append(toolCalls, schema.ToolCall{
+				ID:        tb.ID,
+				Name:      tb.Name,
+				Arguments: tb.Input,
+			})
 		}
 	}
-	return sb.String()
+	return text.String(), toolCalls
+}
+
+func toAnthropicTool(td schema.ToolDef) anthropicsdk.ToolUnionParam {
+	var props any
+	if len(td.Parameters) > 0 {
+		var m map[string]any
+		if err := json.Unmarshal(td.Parameters, &m); err == nil {
+			if p, ok := m["properties"]; ok {
+				props = p
+			}
+		}
+	}
+	var required []string
+	if len(td.Parameters) > 0 {
+		var m map[string]any
+		if err := json.Unmarshal(td.Parameters, &m); err == nil {
+			if req, ok := m["required"].([]any); ok {
+				for _, r := range req {
+					if s, ok := r.(string); ok {
+						required = append(required, s)
+					}
+				}
+			}
+		}
+	}
+	return anthropicsdk.ToolUnionParam{
+		OfTool: &anthropicsdk.ToolParam{
+			Name:        td.Name,
+			Description: anthropicsdk.String(td.Description),
+			InputSchema: anthropicsdk.ToolInputSchemaParam{
+				Type:       "object",
+				Properties: props,
+				Required:   required,
+			},
+		},
+	}
+}
+
+func toAnthropicToolChoice(choice string) anthropicsdk.ToolChoiceUnionParam {
+	switch choice {
+	case "auto":
+		return anthropicsdk.ToolChoiceUnionParam{OfAuto: &anthropicsdk.ToolChoiceAutoParam{}}
+	case "any", "required":
+		return anthropicsdk.ToolChoiceUnionParam{OfAny: &anthropicsdk.ToolChoiceAnyParam{}}
+	case "none":
+		return anthropicsdk.ToolChoiceUnionParam{OfNone: &anthropicsdk.ToolChoiceNoneParam{}}
+	default:
+		return anthropicsdk.ToolChoiceUnionParam{
+			OfTool: &anthropicsdk.ToolChoiceToolParam{Name: choice},
+		}
+	}
 }

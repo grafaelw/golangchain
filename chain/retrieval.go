@@ -111,6 +111,10 @@ func (c *RetrievalQAChain) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: c, second: next}
 }
 
+func (c *RetrievalQAChain) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, c, inputs)
+}
+
 func extractQuestion(input any) (string, error) {
 	switch v := input.(type) {
 	case string:
@@ -260,6 +264,10 @@ func (s *MapReduceSummarizer) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: s, second: next}
 }
 
+func (s *MapReduceSummarizer) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, s, inputs)
+}
+
 // ---------------------------------------------------------------------------
 // RefineSummarizer
 // ---------------------------------------------------------------------------
@@ -357,6 +365,10 @@ func (s *RefineSummarizer) Stream(ctx context.Context, input any) (<-chan Stream
 
 func (s *RefineSummarizer) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: s, second: next}
+}
+
+func (s *RefineSummarizer) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, s, inputs)
 }
 
 // ---------------------------------------------------------------------------

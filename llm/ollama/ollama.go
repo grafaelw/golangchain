@@ -5,6 +5,7 @@ package ollama
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -138,7 +139,7 @@ func (l *LLM) buildParams(messages []schema.Message, o llm.Options) openai.ChatC
 	}
 	params := openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(model),
-		Messages: toOpenAIMessages(messages),
+		Messages: toOllamaMessages(messages),
 	}
 	if o.Temperature != nil {
 		params.Temperature = openai.Float(*o.Temperature)
@@ -146,10 +147,58 @@ func (l *LLM) buildParams(messages []schema.Message, o llm.Options) openai.ChatC
 	if o.MaxTokens != nil {
 		params.MaxTokens = openai.Int(int64(*o.MaxTokens))
 	}
+	if o.TopP != nil {
+		params.TopP = openai.Float(*o.TopP)
+	}
+	if len(o.StopSequences) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: o.StopSequences}
+	}
+	if o.FrequencyPenalty != nil {
+		params.FrequencyPenalty = openai.Float(*o.FrequencyPenalty)
+	}
+	if o.PresencePenalty != nil {
+		params.PresencePenalty = openai.Float(*o.PresencePenalty)
+	}
+	if o.Seed != nil {
+		params.Seed = openai.Int(int64(*o.Seed))
+	}
+	for _, td := range o.Tools {
+		var fnParams shared.FunctionParameters
+		if len(td.Parameters) > 0 {
+			_ = json.Unmarshal(td.Parameters, &fnParams)
+		}
+		params.Tools = append(params.Tools, openai.ChatCompletionToolParam{
+			Function: shared.FunctionDefinitionParam{
+				Name:        td.Name,
+				Description: openai.String(td.Description),
+				Parameters:  fnParams,
+			},
+		})
+	}
+	if o.ToolChoice != "" {
+		switch o.ToolChoice {
+		case "none":
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String("none"),
+			}
+		case "auto":
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String("auto"),
+			}
+		case "required":
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String("required"),
+			}
+		default:
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(
+				openai.ChatCompletionNamedToolChoiceFunctionParam{Name: o.ToolChoice},
+			)
+		}
+	}
 	return params
 }
 
-func toOpenAIMessages(msgs []schema.Message) []openai.ChatCompletionMessageParamUnion {
+func toOllamaMessages(msgs []schema.Message) []openai.ChatCompletionMessageParamUnion {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
 		switch m.Role {
@@ -158,10 +207,28 @@ func toOpenAIMessages(msgs []schema.Message) []openai.ChatCompletionMessageParam
 		case schema.RoleHuman:
 			out = append(out, openai.UserMessage(m.Content))
 		case schema.RoleAI:
-			out = append(out, openai.AssistantMessage(m.Content))
+			out = append(out, buildAIMessage(m))
 		case schema.RoleTool:
 			out = append(out, openai.ToolMessage(m.Content, m.ToolCallID))
 		}
 	}
 	return out
+}
+
+func buildAIMessage(m schema.Message) openai.ChatCompletionMessageParamUnion {
+	asst := openai.ChatCompletionAssistantMessageParam{}
+	asst.Content.OfString = openai.String(m.Content)
+	for _, tc := range m.ToolCalls {
+		asst.ToolCalls = append(asst.ToolCalls, openai.ChatCompletionMessageToolCallParam{
+			ID: tc.ID,
+			Function: openai.ChatCompletionMessageToolCallFunctionParam{
+				Name:      tc.Name,
+				Arguments: string(tc.Arguments),
+			},
+		})
+	}
+	if len(asst.ToolCalls) > 0 {
+		return openai.ChatCompletionMessageParamUnion{OfAssistant: &asst}
+	}
+	return openai.AssistantMessage(m.Content)
 }

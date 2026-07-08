@@ -205,6 +205,18 @@ func (g *StateGraph[S]) AddParallelEdges(from string, branches []string) error {
 	return nil
 }
 
+// AddSubgraph adds a CompiledGraph as a named node.
+func (g *StateGraph[S]) AddSubgraph(name string, subgraph *CompiledGraph[S]) error {
+	return g.AddNode(name, SubgraphNode(subgraph))
+}
+
+// MustAddSubgraph is like AddSubgraph but panics on error.
+func (g *StateGraph[S]) MustAddSubgraph(name string, subgraph *CompiledGraph[S]) {
+	if err := g.AddSubgraph(name, subgraph); err != nil {
+		panic(err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Compile options
 // ---------------------------------------------------------------------------

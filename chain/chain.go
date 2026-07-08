@@ -50,6 +50,53 @@ type Runnable interface {
 	// Pipe composes this Runnable with next, returning a new Runnable that
 	// passes the output of this directly as input to next.
 	Pipe(next Runnable) Runnable
+
+	// Batch runs Invoke concurrently for each input, returning a slice of
+	// outputs in the same order. Errors from individual inputs are propagated
+	// as the first non-nil error. Implementations may override for custom
+	// concurrency control.
+	Batch(ctx context.Context, inputs []any) ([]any, error)
+}
+
+// ---------------------------------------------------------------------------
+// RunBatch — concurrent batch execution for any Runnable
+// ---------------------------------------------------------------------------
+
+// RunBatch runs r.Invoke concurrently for every input and collects results
+// in order. Concurrency is bounded by the length of inputs (no artificial cap).
+// If any invocation fails the first error is returned.
+func RunBatch(ctx context.Context, r Runnable, inputs []any) ([]any, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	results := make([]any, len(inputs))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	for i, input := range inputs {
+		wg.Add(1)
+		go func(idx int, in any) {
+			defer wg.Done()
+			out, err := r.Invoke(ctx, in)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && firstErr == nil {
+				firstErr = err
+				return
+			}
+			results[idx] = out
+		}(i, input)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
+}
+
+// Batch is the default Batch implementation for types that embed or delegate to Runnable.
+func Batch(ctx context.Context, r Runnable, inputs []any) ([]any, error) {
+	return RunBatch(ctx, r, inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +127,10 @@ func (p *pipeRunnable) Stream(ctx context.Context, input any) (<-chan StreamChun
 
 func (p *pipeRunnable) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: p, second: next}
+}
+
+func (p *pipeRunnable) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, p, inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +169,10 @@ func (f *FuncRunnable) Stream(ctx context.Context, input any) (<-chan StreamChun
 
 func (f *FuncRunnable) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: f, second: next}
+}
+
+func (f *FuncRunnable) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, f, inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +266,10 @@ func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk
 
 func (r *LLMRunnable) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: r, second: next}
+}
+
+func (r *LLMRunnable) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, r, inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +453,10 @@ func (c *LLMChain) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: c, second: next}
 }
 
+func (c *LLMChain) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, c, inputs)
+}
+
 // ---------------------------------------------------------------------------
 // SequentialChain — runs Runnables in order, threading output→input
 // ---------------------------------------------------------------------------
@@ -446,6 +509,10 @@ func (s *SequentialChain) Stream(ctx context.Context, input any) (<-chan StreamC
 
 func (s *SequentialChain) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: s, second: next}
+}
+
+func (s *SequentialChain) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, s, inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -520,6 +587,10 @@ func (m *MapChain) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: m, second: next}
 }
 
+func (m *MapChain) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, m, inputs)
+}
+
 // ---------------------------------------------------------------------------
 // RouterChain — routes to one of several sub-chains based on a selector
 // ---------------------------------------------------------------------------
@@ -572,6 +643,10 @@ func (r *RouterChain) Stream(ctx context.Context, input any) (<-chan StreamChunk
 
 func (r *RouterChain) Pipe(next Runnable) Runnable {
 	return &pipeRunnable{first: r, second: next}
+}
+
+func (r *RouterChain) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, r, inputs)
 }
 
 // ---------------------------------------------------------------------------

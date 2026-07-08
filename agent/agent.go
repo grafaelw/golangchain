@@ -16,10 +16,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/grafaelw/golangchain/callbacks"
+	"github.com/grafaelw/golangchain/graph"
 	"github.com/grafaelw/golangchain/llm"
 	"github.com/grafaelw/golangchain/memory"
+	"github.com/grafaelw/golangchain/middleware"
 	"github.com/grafaelw/golangchain/schema"
 	"github.com/grafaelw/golangchain/tools"
 )
@@ -74,6 +77,9 @@ type Agent interface {
 //  2. Calls each tool.Run for each action.
 //  3. Appends observations to the step history.
 //  4. Repeats until a finish signal or MaxIter is reached.
+//
+// Middleware hooks into the loop at BeforeModel, AfterModel, BeforeTool,
+// and AfterTool points. Checkpointer persists state across runs.
 type AgentExecutor struct {
 	Agent     Agent
 	Tools     []tools.Tool
@@ -81,6 +87,11 @@ type AgentExecutor struct {
 	Callbacks *callbacks.CallbackManager
 	MaxIter   int  // default: 10
 	Verbose   bool // if true, prints thoughts/actions to stdout
+
+	Middleware     []middleware.Middleware
+	Checkpointer   AgentCheckpointer
+	ResponseFormat any // if set, final answer is validated/cleaned as JSON
+	ThreadID       string
 }
 
 // NewAgentExecutor constructs an AgentExecutor.
@@ -112,6 +123,56 @@ func WithVerbose(v bool) ExecutorOption {
 	return func(e *AgentExecutor) { e.Verbose = v }
 }
 
+func WithMiddleware(mw ...middleware.Middleware) ExecutorOption {
+	return func(e *AgentExecutor) { e.Middleware = append(e.Middleware, mw...) }
+}
+
+func WithResponseFormat(v any) ExecutorOption {
+	return func(e *AgentExecutor) { e.ResponseFormat = v }
+}
+
+func WithThreadID(id string) ExecutorOption {
+	return func(e *AgentExecutor) { e.ThreadID = id }
+}
+
+// ---------------------------------------------------------------------------
+// AgentCheckpointer — agent-specific checkpointing abstraction
+// ---------------------------------------------------------------------------
+
+// AgentCheckpointer saves and loads agent conversation state as a slice of
+// messages. It wraps the generic graph.Checkpointer for agent usage.
+type AgentCheckpointer interface {
+	Save(ctx context.Context, threadID string, messages []schema.Message) error
+	Load(ctx context.Context, threadID string) ([]schema.Message, error)
+}
+
+// AsAgentCheckpointer adapts a graph.Checkpointer[schema.Message] into an
+// AgentCheckpointer. Use this with MemoryCheckpointer, FileCheckpointer,
+// or JSONLCheckpointer.
+func AsAgentCheckpointer(cp graph.Checkpointer[[]schema.Message]) AgentCheckpointer {
+	return &agentCheckpointerAdapter{cp: cp}
+}
+
+type agentCheckpointerAdapter struct {
+	cp graph.Checkpointer[[]schema.Message]
+}
+
+func (a *agentCheckpointerAdapter) Save(ctx context.Context, threadID string, messages []schema.Message) error {
+	return a.cp.Save(ctx, threadID, graph.Checkpoint[[]schema.Message]{
+		ThreadID:  threadID,
+		State:     messages,
+		CreatedAt: time.Now(),
+	})
+}
+
+func (a *agentCheckpointerAdapter) Load(ctx context.Context, threadID string) ([]schema.Message, error) {
+	cp, err := a.cp.Load(ctx, threadID)
+	if err != nil || cp == nil {
+		return nil, err
+	}
+	return cp.State, nil
+}
+
 // Run executes the agent loop and returns the final answer string.
 func (e *AgentExecutor) Run(ctx context.Context, input string) (string, error) {
 	var finalAnswer string
@@ -137,9 +198,6 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 	go func() {
 		defer close(ch)
 
-		// Propagate callbacks into context so agent Plan() methods can fire
-		// LLM-level events without holding a direct reference to the manager.
-		// Also inject a root run ID for the executor so nested spans depth correctly.
 		agentCtx := ctx
 		if e.Callbacks != nil {
 			agentCtx = callbacks.WithCallbackManager(ctx, e.Callbacks)
@@ -148,6 +206,14 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 
 		// Build initial messages
 		messages := []schema.Message{schema.NewHumanMessage(input)}
+
+		// Load from checkpointer
+		if e.ThreadID != "" && e.Checkpointer != nil {
+			prevMsgs, err := e.Checkpointer.Load(agentCtx, e.ThreadID)
+			if err == nil && len(prevMsgs) > 0 {
+				messages = append(prevMsgs, messages...)
+			}
+		}
 
 		// Inject memory
 		if e.Memory != nil {
@@ -164,11 +230,33 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 		var steps []schema.AgentStep
 
 		for iter := 0; iter < e.MaxIter; iter++ {
+			// Middleware: BeforeModel
+			planMsgs := messages
+			for _, mw := range e.Middleware {
+				var err error
+				planMsgs, err = mw.BeforeModel(agentCtx, planMsgs, steps)
+				if err != nil {
+					ch <- AgentEvent{Type: EventError, Err: fmt.Errorf("middleware before_model: %w", err)}
+					return
+				}
+			}
+
 			// Ask the agent what to do next
-			actions, finish, err := e.Agent.Plan(agentCtx, messages, steps)
+			actions, finish, err := e.Agent.Plan(agentCtx, planMsgs, steps)
 			if err != nil {
 				ch <- AgentEvent{Type: EventError, Err: fmt.Errorf("agent plan iter %d: %w", iter, err)}
 				return
+			}
+
+			// Middleware: AfterModel
+			gen := buildAfterModelResult(actions, finish)
+			for _, mw := range e.Middleware {
+				var mwErr error
+				gen, mwErr = mw.AfterModel(agentCtx, gen)
+				if mwErr != nil {
+					ch <- AgentEvent{Type: EventError, Err: fmt.Errorf("middleware after_model: %w", mwErr)}
+					return
+				}
 			}
 
 			// Agent decided it's done
@@ -180,7 +268,18 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 				if e.Memory != nil {
 					_ = e.Memory.SaveContext(agentCtx, input, finish.Output)
 				}
-				ch <- AgentEvent{Type: EventFinalAnswer, Answer: finish.Output}
+
+				// Parse structured output if configured
+				answer, parsedErr := e.parseStructuredOutput(finish.Output)
+				if parsedErr != nil {
+					ch <- AgentEvent{Type: EventError, Err: parsedErr}
+					return
+				}
+
+				// Save final checkpoint
+				e.saveCheckpoint(agentCtx, messages)
+
+				ch <- AgentEvent{Type: EventFinalAnswer, Answer: answer}
 				return
 			}
 
@@ -194,16 +293,42 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 				}
 				ch <- AgentEvent{Type: EventToolCall, Action: action}
 
+				// Middleware: BeforeTool
+				toolInput := action.ToolInput
+				for _, mw := range e.Middleware {
+					var mwErr error
+					toolInput, mwErr = mw.BeforeTool(agentCtx, action.Tool, toolInput)
+					if mwErr != nil {
+						ch <- AgentEvent{Type: EventError, Err: fmt.Errorf("middleware before_tool: %w", mwErr)}
+						return
+					}
+				}
+
 				// Create a tool-level run ID nested under the agent run.
 				toolCtx := agentCtx
 				if e.Callbacks != nil {
 					toolCtx = callbacks.WithRunID(agentCtx, callbacks.NewRunID())
-					e.Callbacks.OnToolStart(toolCtx, action.Tool, action.ToolInput)
+					e.Callbacks.OnToolStart(toolCtx, action.Tool, toolInput)
 				}
-				observation, toolErr := e.runTool(toolCtx, action)
+				observation, toolErr := e.runTool(toolCtx, schema.AgentAction{
+					Tool:      action.Tool,
+					ToolInput: toolInput,
+					Log:       action.Log,
+				})
 				if toolErr != nil {
 					observation = "Error: " + toolErr.Error()
 				}
+
+				// Middleware: AfterTool
+				for _, mw := range e.Middleware {
+					var mwErr error
+					observation, mwErr = mw.AfterTool(agentCtx, action.Tool, observation)
+					if mwErr != nil {
+						ch <- AgentEvent{Type: EventError, Err: fmt.Errorf("middleware after_tool: %w", mwErr)}
+						return
+					}
+				}
+
 				if e.Callbacks != nil {
 					e.Callbacks.OnToolEnd(toolCtx, action.Tool, observation)
 				}
@@ -211,19 +336,25 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 
 				steps = append(steps, schema.AgentStep{Action: action, Observation: observation})
 
-				// Append tool result to message history for next plan call
+				// Append tool result to message history for next plan call.
+				// Use a valid tool_use ID that satisfies Anthropic's pattern: ^[a-zA-Z0-9_-]+$
+				tcID := "toolu_" + callbacks.NewRunID()
 				messages = append(messages,
 					schema.Message{
 						Role:    schema.RoleAI,
 						Content: action.Log,
 						ToolCalls: []schema.ToolCall{{
+							ID:        tcID,
 							Name:      action.Tool,
 							Arguments: json.RawMessage(action.ToolInput),
 						}},
 					},
-					schema.NewToolMessage(observation, "", action.Tool),
+					schema.NewToolMessage(observation, tcID, action.Tool),
 				)
 			}
+
+			// Save checkpoint after each iteration
+			e.saveCheckpoint(agentCtx, messages)
 		}
 
 		ch <- AgentEvent{
@@ -232,6 +363,56 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 		}
 	}()
 	return ch
+}
+
+func (e *AgentExecutor) saveCheckpoint(ctx context.Context, messages []schema.Message) {
+	if e.ThreadID == "" || e.Checkpointer == nil {
+		return
+	}
+	_ = e.Checkpointer.Save(ctx, e.ThreadID, messages)
+}
+
+// parseStructuredOutput validates and cleans the final answer as JSON when
+// ResponseFormat is configured. It strips markdown code fences and returns
+// canonical JSON. If ResponseFormat is not set, the raw output is passed through.
+func (e *AgentExecutor) parseStructuredOutput(text string) (string, error) {
+	if e.ResponseFormat == nil {
+		return text, nil
+	}
+	cleaned := stripCodeFence(text)
+	if cleaned == "" {
+		return "", fmt.Errorf("agent: empty structured output")
+	}
+	var v any
+	if err := json.Unmarshal([]byte(cleaned), &v); err != nil {
+		return "", fmt.Errorf("agent: structured output parse: %w (raw: %q)", err, truncate(text, 200))
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("agent: structured output marshal: %w", err)
+	}
+	return string(b), nil
+}
+
+// buildAfterModelResult constructs a synthetic Generation from agent plan
+// results for middleware AfterModel hooks.
+func buildAfterModelResult(actions []schema.AgentAction, finish *schema.AgentFinish) *schema.Generation {
+	if finish != nil {
+		return &schema.Generation{
+			Text:    finish.Output,
+			Message: schema.NewAIMessage(finish.Output),
+		}
+	}
+	if len(actions) > 0 {
+		return &schema.Generation{
+			Text: actions[0].Log,
+			Message: schema.Message{
+				Role:    schema.RoleAI,
+				Content: actions[0].Log,
+			},
+		}
+	}
+	return &schema.Generation{}
 }
 
 func (e *AgentExecutor) runTool(ctx context.Context, action schema.AgentAction) (string, error) {
@@ -459,4 +640,27 @@ func parseReActOutput(text string) ([]schema.AgentAction, *schema.AgentFinish, e
 		ToolInput: actionInput,
 		Log:       thought.String(),
 	}}, nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+func stripCodeFence(s string) string {
+	s = strings.TrimSpace(s)
+	for _, prefix := range []string{"```json", "```JSON", "```"} {
+		if strings.HasPrefix(s, prefix) {
+			s = s[len(prefix):]
+			break
+		}
+	}
+	s = strings.TrimSuffix(s, "```")
+	return strings.TrimSpace(s)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\u2026"
 }

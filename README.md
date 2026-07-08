@@ -10,13 +10,13 @@ all idiomatic Go, no code generation, no reflection magic.
 ### What's included
 
 | Area | Packages |
-|---|---|
+|---|---|---|
 | Core | `schema`, `prompt`, `output`, `chain`, `callbacks`, `tracing` |
-| LLM providers | `llm/{openai,azure,anthropic,gemini,ollama,openaicompat}` |
+| LLM providers | `llm/{openai,azure,anthropic,gemini,ollama,openaicompat}` — all with native tool calling |
 | LLM production wrappers | `llmutil` — cache (memory + file), retry with backoff, rate limiter |
 | Agents | `agent` — ReAct, ToolCalling, PlanAndExecute |
-| RAG stack | `documentloader`, `textsplitter`, `embeddings`, `vectorstore` (in-memory + file), `retriever` (BM25, ensemble/RRF, multi-query, contextual compression) |
-| Chains | LLM, Sequential, Map, Router, **RetrievalQA**, **MapReduce/Refine summarizers** |
+| RAG stack | `documentloader` (+ pdf, docx), `textsplitter`, `embeddings` (+ ollama), `vectorstore` (in-memory, file, qdrant), `retriever` (BM25, ensemble/RRF, multi-query, contextual compression) |
+| Chains | LLM, Sequential, Map, Router, **RetrievalQA**, **MapReduce/Refine summarizers**, **Batch** |
 | Memory | Buffer, Window, Summary, **File (persistent)**, **VectorStore (semantic)** |
 | Graph | Generic `StateGraph[S]` with cycles, conditional/parallel edges, interrupts, and both `MemoryCheckpointer` and **`FileCheckpointer`** |
 | Evaluation | `eval` — Dataset (JSONL), Runner, evaluators: ExactMatch, Contains, Regex, JSONEqual, LLMAsJudge |
@@ -97,21 +97,21 @@ model, _ := openai.New(
 | `llm` | `LLM` interface + functional call options |
 | `llm/openai` | OpenAI Chat Completions — also works with Azure AI Foundry via `WithBaseURL` |
 | `llm/azure` | Azure OpenAI Service (Azure SDK, separate from `llm/openai`) |
-| `llm/anthropic` | Anthropic Claude |
-| `llm/gemini` | Google Gemini |
-| `llm/ollama` | Local Ollama server |
+| `llm/anthropic` | Anthropic Claude — **native tool_use support** |
+| `llm/gemini` | Google Gemini — **native function-calling support** |
+| `llm/ollama` | Local Ollama server — **full OpenAI-compatible tool-calling + parameters** |
 | `llm/openaicompat` | Any OpenAI-schema server (vLLM, LM Studio, llama.cpp …) |
 | `llmutil` | LLM wrappers: `CachingLLM`, `RetryingLLM`, `RateLimitedLLM`; `MemoryCache`, `FileCache` |
 | `prompt` | `PromptTemplate`, `ChatPromptTemplate`, `FewShotPromptTemplate` |
 | `output` | Typed parsers: `Str`, `JSON`, `Struct[T]`, `List`, `Bool` |
-| `chain` | `Runnable` / `Pipe`, `LLMChain`, `SequentialChain`, `MapChain`, `RouterChain`, `RetrievalQAChain`, `MapReduceSummarizer`, `RefineSummarizer` |
+| `chain` | `Runnable` / `Pipe` / **`Batch`**, `LLMChain`, `SequentialChain`, `MapChain`, `RouterChain`, `RetrievalQAChain`, `MapReduceSummarizer`, `RefineSummarizer` |
 | `memory` | `ConversationBufferMemory`, `ConversationWindowMemory`, `ConversationSummaryMemory`, `FileChatHistory`, `VectorStoreMemory` |
 | `tools` | `Tool` interface, `Calculator`, `HTTPFetch`, `DuckDuckGoSearch`, `ShellTool`, `FuncTool` |
 | `agent` | `ReActAgent`, `ToolCallingAgent`, `PlanAndExecuteAgent`, `AgentExecutor`, streaming `AgentEvent` |
-| `embeddings` | `Embedder` interface, `OpenAIEmbedder`, `AzureEmbedder` |
+| `embeddings` | `Embedder` interface, `OpenAIEmbedder`, `AzureEmbedder`, **`OllamaEmbedder`** |
 | `textsplitter` | `CharacterSplitter`, `RecursiveCharacterSplitter`, `MarkdownSplitter` |
-| `documentloader` | `TextLoader`, `MarkdownLoader`, `CSVLoader`, `HTMLLoader`, `HTTPLoader`, `DirectoryLoader` |
-| `vectorstore` | `VectorStore` interface, `InMemoryVectorStore`, `FileVectorStore`, `RetrieverTool` |
+| `documentloader` | `TextLoader`, `MarkdownLoader`, `CSVLoader`, `HTMLLoader`, `HTTPLoader`, `DirectoryLoader`; sub-packages: **`documentloader/pdf`**, **`documentloader/docx`** |
+| `vectorstore` | `VectorStore` interface, `InMemoryVectorStore`, `FileVectorStore`, `RetrieverTool`; sub-packages: **`vectorstore/qdrant`** |
 | `retriever` | `Retriever` interface, `VectorStoreRetriever`, `BM25Retriever`, `EnsembleRetriever` (RRF), `MultiQueryRetriever`, `ContextualCompressionRetriever` |
 | `callbacks` | `Handler` interface, `CallbackManager` fan-out, `LoggingHandler` |
 | `tracing` | In-memory `Tracer`, `PrettyHandler`, `JSONLinesExporter`, `FeedbackStore` |
@@ -188,6 +188,13 @@ mc := chain.NewMapChain("Analyser", map[string]chain.Runnable{
     "keywords": keywordsChain,
 })
 results, _ := mc.Invoke(ctx, text) // map[string]any{"summary": ..., "keywords": ...}
+
+// Batch — run multiple inputs concurrently
+translator := chain.NewLLMChain(prompt, model, parser)
+results, _ := translator.Batch(ctx, []any{
+    map[string]any{"language": "French", "text": "Hello"},
+    map[string]any{"language": "German", "text": "Good morning"},
+}) // => ["Bonjour", "Guten Morgen"]
 ```
 
 ## Agents
@@ -348,6 +355,13 @@ embedder, _ := embeddings.NewAzureEmbedder(
 // OpenAI embeddings alternative
 embedder, _ := embeddings.NewOpenAIEmbedder(os.Getenv("OPENAI_API_KEY"), "text-embedding-3-small")
 
+// Ollama embeddings — fully local, no API key required
+embedder, _ := ollamaembeddings.New(ollamaembeddings.WithModel("nomic-embed-text"))
+
+store := vectorstore.NewInMemoryVectorStore(embedder)
+// — or Qdrant for production —
+// store, _ := qdrant.New("http://localhost:6333", embedder)
+
 store := vectorstore.NewInMemoryVectorStore(embedder)
 
 _ = store.AddDocuments(ctx, []schema.Document{
@@ -377,15 +391,21 @@ executor  := agent.NewAgentExecutor(myAgent, []tools.Tool{retriever})
 ## Examples
 
 | Example | Description |
-|---|---|
+|---|---|---|
 | [`examples/simple_chain`](examples/simple_chain/main.go) | LCEL pipeline + memory + streaming |
 | [`examples/chains`](examples/chains/main.go) | LCEL Runnables (FuncRunnable, Sequential/Map/Router chains) + output parsers |
 | [`examples/memory_and_tools`](examples/memory_and_tools/main.go) | Buffer/Window/Summary memory + Calculator/FuncTool |
 | [`examples/react_agent`](examples/react_agent/main.go) | Tool-calling agent with streaming events |
+| [`examples/anthropic_agent`](examples/anthropic_agent/main.go) | ToolCallingAgent with Anthropic native `tool_use` + streaming |
+| [`examples/gemini_agent`](examples/gemini_agent/main.go) | ToolCallingAgent with Gemini native function-calling + streaming |
 | [`examples/state_graph`](examples/state_graph/main.go) | LangGraph-style StateGraph with checkpointing and human-in-the-loop |
 | [`examples/vectorstore`](examples/vectorstore/main.go) | Embeddings + InMemoryVectorStore + RetrieverTool |
 | [`examples/tracing`](examples/tracing/main.go) | LangSmith-style tracing with PrettyHandler + in-memory run tree |
 | [`examples/rag`](examples/rag/main.go) | Full RAG pipeline: loader → splitter → hybrid retriever → QA chain + eval |
+| [`examples/document_loaders`](examples/document_loaders/main.go) | PDF, DOCX, Text, Directory loaders → splitter → RAG QA |
+| [`examples/ollama_rag`](examples/ollama_rag/main.go) | Fully-local RAG: Ollama LLM + Ollama embeddings + vector store |
+| [`examples/batch`](examples/batch/main.go) | `Runnable.Batch()` — concurrent translation pipeline + sequential comparison |
+| [`examples/qdrant_store`](examples/qdrant_store/main.go) | Qdrant vector DB: collection creation, indexing, search, delete |
 
 All examples use **Azure AI Foundry** by default. Every file contains a
 clearly marked comment block showing the two-line swap for the **OpenAI API**.
