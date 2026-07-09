@@ -5,6 +5,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,10 @@ import (
 
 	"github.com/grafaelw/golangchain/schema"
 )
+
+// ErrToolNotFound is returned when an agent requests a tool that is not
+// registered in the executor's tool set.
+var ErrToolNotFound = errors.New("tool not found")
 
 // ---------------------------------------------------------------------------
 // Tool interface

@@ -97,6 +97,12 @@ func (e *Embedder) EmbedQuery(ctx context.Context, text string) ([]float64, erro
 	return results[0], nil
 }
 
+// Close closes the HTTP transport's idle connections.
+func (e *Embedder) Close() error {
+	e.client.CloseIdleConnections()
+	return nil
+}
+
 // Ensure interface compliance.
 var _ embeddings.Embedder = (*Embedder)(nil)
 

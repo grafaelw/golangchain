@@ -86,6 +86,14 @@ func (s *FileVectorStore) Flush() error {
 	return os.Rename(tmp, s.Path)
 }
 
+// Close flushes and clears the in-memory index. Implements io.Closer.
+func (s *FileVectorStore) Close() error {
+	if err := s.Flush(); err != nil {
+		return err
+	}
+	return s.InMemoryVectorStore.Close()
+}
+
 // ---------------------------------------------------------------------------
 // On-disk format
 // ---------------------------------------------------------------------------

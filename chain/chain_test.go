@@ -82,7 +82,7 @@ func TestFuncRunnable_Stream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var last chain.StreamChunk
+	var last schema.StreamChunk
 	for c := range ch {
 		last = c
 	}
@@ -356,7 +356,7 @@ func TestSequentialChain_Stream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var last chain.StreamChunk
+	var last schema.StreamChunk
 	for c := range ch {
 		last = c
 	}

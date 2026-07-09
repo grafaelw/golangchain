@@ -175,6 +175,14 @@ func (s *InMemoryVectorStore) Len() int {
 	return len(s.entries)
 }
 
+// Close clears the store. Implements io.Closer for clean teardown.
+func (s *InMemoryVectorStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries = nil
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Cosine similarity
 // ---------------------------------------------------------------------------

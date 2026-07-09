@@ -79,7 +79,7 @@ func (c *RetrievalQAChain) Invoke(ctx context.Context, input any) (any, error) {
 	return answer, nil
 }
 
-func (c *RetrievalQAChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
+func (c *RetrievalQAChain) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
 	question, err := extractQuestion(input)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.Name, err)
@@ -93,15 +93,16 @@ func (c *RetrievalQAChain) Stream(ctx context.Context, input any) (<-chan Stream
 	if err != nil {
 		return nil, err
 	}
-	out := make(chan StreamChunk, 32)
+	out := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(out)
 		for chunk := range llmCh {
 			if chunk.Err != nil {
-				out <- StreamChunk{Err: chunk.Err}
+				out <- chunk
 				return
 			}
-			out <- StreamChunk{Value: chunk.Text, Done: chunk.Done}
+			chunk.Value = chunk.Text
+			out <- chunk
 		}
 	}()
 	return out, nil
@@ -246,16 +247,16 @@ func (s *MapReduceSummarizer) summarise(ctx context.Context, tmpl, key, value st
 	return strings.TrimSpace(gen.Text), nil
 }
 
-func (s *MapReduceSummarizer) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
-	ch := make(chan StreamChunk, 1)
+func (s *MapReduceSummarizer) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
+	ch := make(chan schema.StreamChunk, 1)
 	go func() {
 		defer close(ch)
 		out, err := s.Invoke(ctx, input)
 		if err != nil {
-			ch <- StreamChunk{Err: err}
+			ch <- schema.StreamChunk{Err: err}
 			return
 		}
-		ch <- StreamChunk{Value: out, Done: true}
+		ch <- schema.StreamChunk{Value: out, Done: true}
 	}()
 	return ch, nil
 }
@@ -349,16 +350,16 @@ func (s *RefineSummarizer) callTemplate(ctx context.Context, tmpl string, vars m
 	return strings.TrimSpace(gen.Text), nil
 }
 
-func (s *RefineSummarizer) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
-	ch := make(chan StreamChunk, 1)
+func (s *RefineSummarizer) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
+	ch := make(chan schema.StreamChunk, 1)
 	go func() {
 		defer close(ch)
 		out, err := s.Invoke(ctx, input)
 		if err != nil {
-			ch <- StreamChunk{Err: err}
+			ch <- schema.StreamChunk{Err: err}
 			return
 		}
-		ch <- StreamChunk{Value: out, Done: true}
+		ch <- schema.StreamChunk{Value: out, Done: true}
 	}()
 	return ch, nil
 }

@@ -105,6 +105,9 @@ func (e *OpenAIEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([]
 	return all, nil
 }
 
+// Close releases idle connections held by the underlying HTTP client.
+func (e *OpenAIEmbedder) Close() error { return nil }
+
 // EmbedQuery embeds a single query string.
 func (e *OpenAIEmbedder) EmbedQuery(ctx context.Context, text string) ([]float64, error) {
 	results, err := e.embed(ctx, []string{text})
@@ -185,6 +188,7 @@ func NewAzureEmbedder(apiKey, endpoint, deployment, apiVersion string, opts ...A
 	return e, nil
 }
 
+// EmbedDocuments embeds a batch of texts, batching requests.
 func (e *AzureEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([][]float64, error) {
 	if len(texts) == 0 {
 		return nil, nil
@@ -205,6 +209,10 @@ func (e *AzureEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([][
 	return all, nil
 }
 
+// Close releases idle connections held by the underlying HTTP client.
+func (e *AzureEmbedder) Close() error { return nil }
+
+// EmbedQuery embeds a single query string.
 func (e *AzureEmbedder) EmbedQuery(ctx context.Context, text string) ([]float64, error) {
 	results, err := e.embed(ctx, []string{text})
 	if err != nil {

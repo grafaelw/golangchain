@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -140,6 +141,18 @@ func (c *CachingLLM) Generate(ctx context.Context, messages []schema.Message, op
 
 func (c *CachingLLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm.Option) (<-chan schema.StreamChunk, error) {
 	return c.Inner.Stream(ctx, messages, opts...)
+}
+
+// Close releases resources held by the underlying LLM (if it implements
+// io.Closer) and by the cache (if closable). It is safe to call multiple times.
+func (c *CachingLLM) Close() error {
+	if closer, ok := c.Inner.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	if closer, ok := c.Cache.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	return nil
 }
 
 // hashCall computes a deterministic cache key from the model name, messages

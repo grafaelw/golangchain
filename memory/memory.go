@@ -22,18 +22,21 @@ import (
 // the conversation history under a well-known key like "history").
 // SaveContext persists an input/output turn after the LLM responds.
 type Memory interface {
-	// LoadMemoryVariables returns variables for prompt injection.
-	// The keys returned depend on the implementation (e.g. "history").
 	LoadMemoryVariables(ctx context.Context) (map[string]any, error)
-
-	// SaveContext records one conversation turn.
 	SaveContext(ctx context.Context, humanInput, aiOutput string) error
-
-	// Messages returns the raw conversation history as schema.Message slice.
 	Messages() []schema.Message
-
-	// Clear wipes all stored history.
 	Clear(ctx context.Context) error
+}
+
+// MessagesMemory extends Memory with the ability to save multi-message turns
+// that include tool calls, tool results, and intermediate agent steps.
+// Implementations that do not support this fall back to SaveContext.
+type MessagesMemory interface {
+	Memory
+	// SaveMessages records a turn containing arbitrary messages (human,
+	// AI with tool calls, tool results). This preserves full agent
+	// interaction history for accurate conversation replay.
+	SaveMessages(ctx context.Context, msgs []schema.Message) error
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +117,13 @@ func (m *ConversationBufferMemory) Clear(_ context.Context) error {
 	return nil
 }
 
+func (m *ConversationBufferMemory) SaveMessages(_ context.Context, msgs []schema.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, msgs...)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // ConversationWindowMemory — keeps the last k turns
 // ---------------------------------------------------------------------------
@@ -185,6 +195,13 @@ func (m *ConversationWindowMemory) Clear(_ context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = nil
+	return nil
+}
+
+func (m *ConversationWindowMemory) SaveMessages(_ context.Context, msgs []schema.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, msgs...)
 	return nil
 }
 
@@ -287,5 +304,17 @@ func (m *ConversationSummaryMemory) Clear(_ context.Context) error {
 	defer m.mu.Unlock()
 	m.summary = ""
 	m.recent = nil
+	return nil
+}
+
+func (m *ConversationSummaryMemory) SaveMessages(ctx context.Context, msgs []schema.Message) error {
+	m.mu.Lock()
+	m.recent = append(m.recent, msgs...)
+	exceeded := len(m.recent) > m.MaxRecent*2
+	m.mu.Unlock()
+
+	if exceeded {
+		return m.compress(ctx)
+	}
 	return nil
 }

@@ -263,3 +263,9 @@ func stringToUUID(s string) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
 }
+
+// Close closes the HTTP transport's idle connections.
+func (s *Store) Close() error {
+	s.client.CloseIdleConnections()
+	return nil
+}

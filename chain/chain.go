@@ -19,17 +19,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// StreamChunk — generic value emitted during streaming
-// ---------------------------------------------------------------------------
-
-// StreamChunk wraps a partial value emitted by a streaming Runnable.
-type StreamChunk struct {
-	Value any
-	Done  bool
-	Err   error
-}
-
-// ---------------------------------------------------------------------------
 // Runnable — the core composable interface (LCEL equivalent)
 // ---------------------------------------------------------------------------
 
@@ -43,9 +32,11 @@ type Runnable interface {
 	// Invoke executes the runnable with the given input and returns output.
 	Invoke(ctx context.Context, input any) (any, error)
 
-	// Stream executes the runnable and yields incremental output chunks.
-	// The channel is closed after the final chunk (Done==true) or on error.
-	Stream(ctx context.Context, input any) (<-chan StreamChunk, error)
+	// Stream executes the runnable and yields incremental schema.StreamChunk
+	// values. At the LLM layer Text carries tokens; higher-level runnables
+	// populate Value for typed pipeline data. The channel is closed after
+	// the final chunk (Done==true) or on error.
+	Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error)
 
 	// Pipe composes this Runnable with next, returning a new Runnable that
 	// passes the output of this directly as input to next.
@@ -116,7 +107,7 @@ func (p *pipeRunnable) Invoke(ctx context.Context, input any) (any, error) {
 	return p.second.Invoke(ctx, mid)
 }
 
-func (p *pipeRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
+func (p *pipeRunnable) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
 	// For a pipe, only the last element streams; earlier ones block.
 	mid, err := p.first.Invoke(ctx, input)
 	if err != nil {
@@ -153,16 +144,16 @@ func (f *FuncRunnable) Invoke(ctx context.Context, input any) (any, error) {
 	return f.fn(ctx, input)
 }
 
-func (f *FuncRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
-	ch := make(chan StreamChunk, 1)
+func (f *FuncRunnable) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
+	ch := make(chan schema.StreamChunk, 1)
 	go func() {
 		defer close(ch)
 		out, err := f.fn(ctx, input)
 		if err != nil {
-			ch <- StreamChunk{Err: err}
+			ch <- schema.StreamChunk{Err: err}
 			return
 		}
-		ch <- StreamChunk{Value: out, Done: true}
+		ch <- schema.StreamChunk{Value: out, Done: true}
 	}()
 	return ch, nil
 }
@@ -221,7 +212,7 @@ func (r *LLMRunnable) Invoke(ctx context.Context, input any) (any, error) {
 	return gen, nil
 }
 
-func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
+func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
 	msgs, err := toMessages(input)
 	if err != nil {
 		return nil, fmt.Errorf("LLMRunnable: %w", err)
@@ -239,7 +230,7 @@ func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk
 		return nil, fmt.Errorf("LLMRunnable: stream: %w", err)
 	}
 
-	out := make(chan StreamChunk, 32)
+	out := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(out)
 		for chunk := range llmCh {
@@ -250,7 +241,7 @@ func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk
 				if r.Callbacks != nil {
 					r.Callbacks.OnError(llmCtx, "LLMRunnable", chunk.Err)
 				}
-				out <- StreamChunk{Err: chunk.Err}
+				out <- chunk
 				return
 			}
 			if chunk.Done {
@@ -258,7 +249,10 @@ func (r *LLMRunnable) Stream(ctx context.Context, input any) (<-chan StreamChunk
 					r.Callbacks.OnLLMEnd(llmCtx, r.LLM.ModelName(), &schema.Generation{})
 				}
 			}
-			out <- StreamChunk{Value: chunk.Text, Done: chunk.Done}
+			// Propagate LLM chunks directly; set Value from Text for
+			// downstream runnables that consume Value.
+			chunk.Value = chunk.Text
+			out <- chunk
 		}
 	}()
 	return out, nil
@@ -381,7 +375,7 @@ func (c *LLMChain) Invoke(ctx context.Context, input any) (any, error) {
 
 // Stream runs the prompt and LLM in streaming mode; the parser is applied
 // to the accumulated full text at the end.
-func (c *LLMChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
+func (c *LLMChain) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
 	vars, err := toVars(input)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.name, err)
@@ -412,7 +406,7 @@ func (c *LLMChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, e
 		return nil, fmt.Errorf("%s: stream: %w", c.name, err)
 	}
 
-	out := make(chan StreamChunk, 32)
+	out := make(chan schema.StreamChunk, 32)
 	go func() {
 		defer close(out)
 		var full string
@@ -421,27 +415,29 @@ func (c *LLMChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, e
 				if c.callbacks != nil {
 					c.callbacks.OnError(llmCtx, c.name, chunk.Err)
 				}
-				out <- StreamChunk{Err: chunk.Err}
+				out <- chunk
 				return
 			}
 			if c.callbacks != nil && chunk.Text != "" {
 				c.callbacks.OnLLMStream(llmCtx, c.llm.ModelName(), chunk)
 			}
 			full += chunk.Text
-			out <- StreamChunk{Value: chunk.Text}
+			// Forward text; set Value for downstream consumers.
+			chunk.Value = chunk.Text
+			out <- chunk
 			if chunk.Done {
 				if c.callbacks != nil {
 					c.callbacks.OnLLMEnd(llmCtx, c.llm.ModelName(), &schema.Generation{Text: full})
 				}
 				parsed, err := c.parser.Parse(full)
 				if err != nil {
-					out <- StreamChunk{Err: err}
+					out <- schema.StreamChunk{Err: err}
 					return
 				}
 				if c.callbacks != nil {
 					c.callbacks.OnChainEnd(chainCtx, c.name, map[string]any{"output": parsed})
 				}
-				out <- StreamChunk{Value: parsed, Done: true}
+				out <- schema.StreamChunk{Value: parsed, Done: true}
 				return
 			}
 		}
@@ -494,7 +490,7 @@ func (s *SequentialChain) Invoke(ctx context.Context, input any) (any, error) {
 	return current, nil
 }
 
-func (s *SequentialChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
+func (s *SequentialChain) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
 	// Only the final step streams; all prior steps run to completion.
 	current := input
 	for i, step := range s.steps[:len(s.steps)-1] {
@@ -567,20 +563,8 @@ func (m *MapChain) Invoke(ctx context.Context, input any) (any, error) {
 	return out, nil
 }
 
-func (m *MapChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
-	// MapChain streams are not well-defined for parallel branches.
-	// Fall back to blocking Invoke and emit a single Done chunk.
-	ch := make(chan StreamChunk, 1)
-	go func() {
-		defer close(ch)
-		out, err := m.Invoke(ctx, input)
-		if err != nil {
-			ch <- StreamChunk{Err: err}
-			return
-		}
-		ch <- StreamChunk{Value: out, Done: true}
-	}()
-	return ch, nil
+func (m *MapChain) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
+	return nil, fmt.Errorf("%s: streaming not supported for parallel MapChain; use Invoke instead", m.name)
 }
 
 func (m *MapChain) Pipe(next Runnable) Runnable {
@@ -626,7 +610,7 @@ func (r *RouterChain) Invoke(ctx context.Context, input any) (any, error) {
 	return target.Invoke(ctx, input)
 }
 
-func (r *RouterChain) Stream(ctx context.Context, input any) (<-chan StreamChunk, error) {
+func (r *RouterChain) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
 	key, err := r.router(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("%s: router: %w", r.name, err)

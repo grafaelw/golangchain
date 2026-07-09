@@ -14,6 +14,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,10 @@ import (
 	"github.com/grafaelw/golangchain/schema"
 	"github.com/grafaelw/golangchain/tools"
 )
+
+// ErrAgentMaxIter is returned when an AgentExecutor exceeds MaxIter
+// without reaching a final answer.
+var ErrAgentMaxIter = errors.New("agent exceeded maximum iterations")
 
 // ---------------------------------------------------------------------------
 // AgentEvent — discriminated union for streaming agent output
@@ -359,7 +364,7 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 
 		ch <- AgentEvent{
 			Type: EventError,
-			Err:  fmt.Errorf("agent exceeded maximum iterations (%d)", e.MaxIter),
+			Err:  fmt.Errorf("%w (%d)", ErrAgentMaxIter, e.MaxIter),
 		}
 	}()
 	return ch
@@ -418,7 +423,7 @@ func buildAfterModelResult(actions []schema.AgentAction, finish *schema.AgentFin
 func (e *AgentExecutor) runTool(ctx context.Context, action schema.AgentAction) (string, error) {
 	t := tools.FindTool(e.Tools, action.Tool)
 	if t == nil {
-		return "", fmt.Errorf("tool %q not found", action.Tool)
+		return "", fmt.Errorf("%q: %w", action.Tool, tools.ErrToolNotFound)
 	}
 	return t.Run(ctx, action.ToolInput)
 }

@@ -2,7 +2,10 @@
 // All packages depend on schema; schema itself has no internal dependencies.
 package schema
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // ---------------------------------------------------------------------------
 // Message roles
@@ -52,6 +55,21 @@ func NewToolMessage(content, toolCallID, name string) Message {
 	return Message{Role: RoleTool, Content: content, ToolCallID: toolCallID, Name: name}
 }
 
+// String returns a compact representation suitable for debugging.
+func (m Message) String() string {
+	if m.Name != "" {
+		return fmt.Sprintf("[%s:%s] %s", m.Role, m.Name, truncateStr(m.Content, 120))
+	}
+	if len(m.ToolCalls) > 0 {
+		names := make([]string, len(m.ToolCalls))
+		for i, tc := range m.ToolCalls {
+			names[i] = tc.Name
+		}
+		return fmt.Sprintf("[%s→tools=%v] %s", m.Role, names, truncateStr(m.Content, 120))
+	}
+	return fmt.Sprintf("[%s] %s", m.Role, truncateStr(m.Content, 120))
+}
+
 // ---------------------------------------------------------------------------
 // Tool calls
 // ---------------------------------------------------------------------------
@@ -62,6 +80,11 @@ type ToolCall struct {
 	Type      string          `json:"type"` // always "function" for now
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"` // JSON-encoded arguments
+}
+
+// String returns a compact tool call representation.
+func (tc ToolCall) String() string {
+	return fmt.Sprintf("ToolCall(%s, args=%s)", tc.Name, string(tc.Arguments))
 }
 
 // ToolDef describes a tool available for the model to call.
@@ -77,20 +100,29 @@ type ToolDef struct {
 
 // Generation is the output of a single LLM call.
 type Generation struct {
-	// Text is the raw string output (for completion models).
-	Text string `json:"text"`
-	// Message is the structured output (for chat models).
-	Message Message `json:"message"`
-	// StopReason indicates why generation stopped (e.g. "stop", "length", "tool_calls").
-	StopReason string `json:"stop_reason,omitempty"`
-	// Usage contains token usage statistics.
-	Usage TokenUsage `json:"usage"`
+	Text       string     `json:"text"`
+	Message    Message    `json:"message"`
+	StopReason string     `json:"stop_reason,omitempty"`
+	Usage      TokenUsage `json:"usage"`
 }
 
-// StreamChunk is a single token or partial text emitted during streaming.
+// String returns the generation text, truncated for display.
+func (g Generation) String() string {
+	if g.StopReason != "" {
+		return fmt.Sprintf("Generation(stop=%s, tokens=%s): %s",
+			g.StopReason, g.Usage.String(), truncateStr(g.Text, 200))
+	}
+	return truncateStr(g.Text, 200)
+}
+
+// StreamChunk is a single token or partial value emitted during streaming.
+// At the LLM layer Text carries incremental output; higher-level Runnables
+// use the Value field for typed pipeline data.
 type StreamChunk struct {
-	// Text is the incremental text fragment.
+	// Text is the incremental text fragment (LLM streaming).
 	Text string
+	// Value is the typed partial value (Runnable pipeline streaming).
+	Value any
 	// ToolCallDelta carries partial tool-call data during streaming.
 	ToolCallDelta *ToolCallDelta
 	// Done is true on the final chunk (carries Usage).
@@ -115,6 +147,14 @@ type TokenUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// String returns token usage as "↑P↓C" (prompt/completion).
+func (u TokenUsage) String() string {
+	if u.TotalTokens == 0 {
+		return "0 tok"
+	}
+	return fmt.Sprintf("↑%d↓%d tok", u.PromptTokens, u.CompletionTokens)
+}
+
 // ---------------------------------------------------------------------------
 // Documents (for RAG)
 // ---------------------------------------------------------------------------
@@ -123,8 +163,16 @@ type TokenUsage struct {
 type Document struct {
 	PageContent string         `json:"page_content"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
-	// Score is populated by similarity search results.
-	Score float64 `json:"score,omitempty"`
+	Score       float64        `json:"score,omitempty"`
+}
+
+// String returns page content truncated to 200 characters, prefixed with
+// score when available.
+func (d Document) String() string {
+	if d.Score != 0 {
+		return fmt.Sprintf("Doc(%.4f): %s", d.Score, truncateStr(d.PageContent, 200))
+	}
+	return fmt.Sprintf("Doc: %s", truncateStr(d.PageContent, 200))
 }
 
 // ---------------------------------------------------------------------------
@@ -134,8 +182,13 @@ type Document struct {
 // AgentAction represents a decision by the agent to invoke a tool.
 type AgentAction struct {
 	Tool      string `json:"tool"`
-	ToolInput string `json:"tool_input"` // JSON or plain string
-	Log       string `json:"log"`        // agent's reasoning / thought
+	ToolInput string `json:"tool_input"`
+	Log       string `json:"log"`
+}
+
+// String returns "tool(input)".
+func (a AgentAction) String() string {
+	return fmt.Sprintf("AgentAction(%s(%s))", a.Tool, a.ToolInput)
 }
 
 // AgentFinish represents the agent's final answer.
@@ -144,8 +197,25 @@ type AgentFinish struct {
 	Log    string `json:"log"`
 }
 
+// String returns the output truncated.
+func (f AgentFinish) String() string {
+	return fmt.Sprintf("AgentFinish: %s", truncateStr(f.Output, 200))
+}
+
 // AgentStep pairs an action with the observation returned by the tool.
 type AgentStep struct {
 	Action      AgentAction `json:"action"`
 	Observation string      `json:"observation"`
+}
+
+// String returns "tool → observation".
+func (s AgentStep) String() string {
+	return fmt.Sprintf("AgentStep: %s → %s", s.Action.String(), truncateStr(s.Observation, 120))
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

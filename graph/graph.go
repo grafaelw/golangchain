@@ -37,12 +37,17 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/grafaelw/golangchain/callbacks"
 )
+
+// ErrGraphMaxSteps is returned when a compiled graph exceeds the maximum
+// number of node executions during a single invocation.
+var ErrGraphMaxSteps = errors.New("graph exceeded max steps")
 
 // ---------------------------------------------------------------------------
 // Sentinel node names
@@ -452,7 +457,7 @@ func (c *CompiledGraph[S]) stream(ctx context.Context, input S, rc *runConfig[S]
 			if steps >= c.cfg.maxSteps {
 				ch <- GraphEvent[S]{
 					Type: GraphEventError,
-					Err:  fmt.Errorf("graph: exceeded max steps (%d) — possible infinite loop", c.cfg.maxSteps),
+					Err:  fmt.Errorf("%w (%d)", ErrGraphMaxSteps, c.cfg.maxSteps),
 				}
 				return
 			}

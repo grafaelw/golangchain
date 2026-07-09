@@ -7,7 +7,7 @@
 //
 //	type Runnable interface {
 //	    Invoke(ctx context.Context, input any) (any, error)
-//	    Stream(ctx context.Context, input any) (<-chan StreamChunk, error)
+//	Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error)
 //	    Pipe(next Runnable) Runnable
 //	}
 //

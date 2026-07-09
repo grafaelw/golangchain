@@ -282,3 +282,9 @@ func (s *Store) request(ctx context.Context, method, path string, body []byte) (
 	}
 	return s.client.Do(req)
 }
+
+// Close closes the HTTP transport's idle connections.
+func (s *Store) Close() error {
+	s.client.CloseIdleConnections()
+	return nil
+}
