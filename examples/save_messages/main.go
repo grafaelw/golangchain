@@ -6,14 +6,18 @@
 // calls, tool call IDs, names, and other metadata that SaveContext strips.
 //
 // Highlights:
+//
 //   - MessagesMemory interface extends Memory with SaveMessages.
+//
 //   - All three memory types implement it: ConversationBufferMemory,
 //     ConversationWindowMemory, and ConversationSummaryMemory.
+//
 //   - Tool-call messages are preserved intact across saves/loads.
+//
 //   - Message.String() provides a compact, readable representation.
 //
-//	Run this example with:
-//	  go run ./examples/save_messages
+//     Run this example with:
+//     go run ./examples/save_messages
 package main
 
 import (
@@ -83,7 +87,7 @@ func main() {
 	// 2. Tool-call ID and content preserved after round-trip
 	// -------------------------------------------------------------------------
 	fmt.Println("\n--- 2. Tool-call round-trip integrity ---")
-	toolCallMsg := history[2]  // the assistant message with ToolCalls
+	toolCallMsg := history[2]   // the assistant message with ToolCalls
 	toolResultMsg := history[3] // the tool result
 	fmt.Printf("  Assistant has %d tool call(s)\n", len(toolCallMsg.ToolCalls))
 	fmt.Printf("  Tool call name:       %s\n", toolCallMsg.ToolCalls[0].Name)

@@ -162,13 +162,13 @@ func formatRows(rows []map[string]string, topK int) string {
 	}
 	var sb strings.Builder
 	for i, row := range rows {
-		sb.WriteString(fmt.Sprintf("[%d] ", i+1))
+		fmt.Fprintf(&sb, "[%d] ", i+1)
 		first := true
 		for k, v := range row {
 			if !first {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(fmt.Sprintf("%s=%s", k, v))
+			fmt.Fprintf(&sb, "%s=%s", k, v)
 			first = false
 		}
 		sb.WriteString("\n")
@@ -198,7 +198,7 @@ func (d *StdSQLDatabase) Tables(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tables []string
 	for rows.Next() {
@@ -231,9 +231,9 @@ func (d *StdSQLDatabase) Schema(ctx context.Context, table string) (string, erro
 		if err != nil {
 			return "", err
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("CREATE TABLE %s (\n", table))
+		fmt.Fprintf(&sb, "CREATE TABLE %s (\n", table)
 		for rows.Next() {
 			var cid int
 			var name, colType string
@@ -243,7 +243,7 @@ func (d *StdSQLDatabase) Schema(ctx context.Context, table string) (string, erro
 			if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
 				return "", err
 			}
-			sb.WriteString(fmt.Sprintf("  %s %s", name, colType))
+			fmt.Fprintf(&sb, "  %s %s", name, colType)
 			if pk > 0 {
 				sb.WriteString(" PRIMARY KEY")
 			}
@@ -261,15 +261,15 @@ func (d *StdSQLDatabase) Schema(ctx context.Context, table string) (string, erro
 		if err != nil {
 			return "", err
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Table: %s\n", table))
+		fmt.Fprintf(&sb, "Table: %s\n", table)
 		for rows.Next() {
 			var col, dtype, nullable string
 			if err := rows.Scan(&col, &dtype, &nullable); err != nil {
 				return "", err
 			}
-			sb.WriteString(fmt.Sprintf("  %s %s nullable=%s\n", col, dtype, nullable))
+			fmt.Fprintf(&sb, "  %s %s nullable=%s\n", col, dtype, nullable)
 		}
 		return strings.TrimSpace(sb.String()), rows.Err()
 	}
@@ -280,7 +280,7 @@ func (d *StdSQLDatabase) Query(ctx context.Context, query string) ([]map[string]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {

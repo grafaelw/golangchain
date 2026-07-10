@@ -360,7 +360,7 @@ func formatChatHistory(history any) string {
 	case []any:
 		var sb strings.Builder
 		for _, item := range v {
-			sb.WriteString(fmt.Sprint(item))
+			fmt.Fprint(&sb, item)
 			sb.WriteString("\n")
 		}
 		return strings.TrimSpace(sb.String())

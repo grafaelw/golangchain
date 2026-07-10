@@ -5,15 +5,18 @@
 // take different recovery paths depending on the failure reason.
 //
 // Sentinels:
+//
 //   - tools.ErrToolNotFound — returned by FindTool when the requested tool
 //     name does not exist in the agent's tool list.
+//
 //   - agent.ErrAgentMaxIter  — returned by AgentExecutor when the agent
 //     exceeds its maximum iteration limit without producing a final answer.
+//
 //   - graph.ErrGraphMaxSteps — returned by CompiledGraph when the execution
 //     hits the configured step limit.
 //
-//	Run this example with:
-//	  go run ./examples/sentinel_errors
+//     Run this example with:
+//     go run ./examples/sentinel_errors
 package main
 
 import (
@@ -42,7 +45,7 @@ func main() {
 		errors.Is(tools.ErrToolNotFound, tools.ErrToolNotFound))
 
 	// Typical usage inside an agent loop:
-	var toolErr error = fmt.Errorf("tool %q: %w", "weather", tools.ErrToolNotFound)
+	toolErr := fmt.Errorf("tool %q: %w", "weather", tools.ErrToolNotFound)
 	fmt.Printf("  Wrapped: %v\n", toolErr)
 	fmt.Printf("  errors.Is(wrapped, tools.ErrToolNotFound) = %v\n",
 		errors.Is(toolErr, tools.ErrToolNotFound))

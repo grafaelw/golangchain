@@ -70,7 +70,7 @@ func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document) error 
 	if err != nil {
 		return fmt.Errorf("pgvector: begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s (id, page_content, metadata, embedding)
@@ -83,7 +83,7 @@ func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document) error 
 	if err != nil {
 		return fmt.Errorf("pgvector: prepare: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for i, doc := range docs {
 		id := fmt.Sprintf("%d", i)
@@ -120,7 +120,7 @@ func (s *Store) SimilaritySearchByVector(ctx context.Context, vector []float64, 
 	if err != nil {
 		return nil, fmt.Errorf("pgvector: search: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var docs []schema.Document
 	for rows.Next() {

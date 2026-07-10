@@ -5,16 +5,20 @@
 // that flush to disk and HTTP clients that hold idle connections.
 //
 // Highlights:
+//
 //   - CachingLLM.Close() cascades to both the inner LLM and the cache
 //     backend if they implement io.Closer.
+//
 //   - InMemoryVectorStore.Close() clears all stored entries.
+//
 //   - FileVectorStore.Close() flushes pending writes then clears memory.
+//
 //   - Embedder.Close() cleans up the underlying HTTP transport (idle
 //     connections) in OllamaEmbedder and is a no-op for OpenAI/Azure
 //     (which reuse the global http.DefaultTransport).
 //
-//	Run this example with:
-//	  go run ./examples/closers
+//     Run this example with:
+//     go run ./examples/closers
 package main
 
 import (
