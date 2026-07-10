@@ -8,7 +8,8 @@
 //   - SequentialChain      — thread output of step N into step N+1
 //   - MapChain             — fan input to parallel branches
 //   - RouterChain          — pick a branch based on a routing function
-//   - output.*Parser       — Str / JSON / Struct / List / Bool
+//   - FallbackChain         — try runnables in order until one succeeds
+//   - output.*Parser         — Str / JSON / Struct / List / Bool
 //
 // # Usage — Azure AI Foundry (default)
 //
@@ -216,9 +217,26 @@ func main() {
 	}
 
 	// -------------------------------------------------------------------------
-	// 8. Output parsers
+	// 8. FallbackChain: try runnables in order until one succeeds
 	// -------------------------------------------------------------------------
-	fmt.Println("\n--- 8. Output parsers ---")
+	fmt.Println("\n--- 8. FallbackChain ---")
+	flakyDB := chain.NewFuncRunnable("flaky", func(_ context.Context, in any) (any, error) {
+		return nil, fmt.Errorf("primary DB unreachable")
+	})
+	fallbackDB := chain.NewFuncRunnable("fallback", func(_ context.Context, in any) (any, error) {
+		return "[FALLBACK] " + in.(string), nil
+	})
+	fb := chain.NewFallbackChain("DatabaseChain", flakyDB, fallbackDB)
+	fbOut, err := fb.Invoke(ctx, "user:123")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("FallbackChain result:", fbOut)
+
+	// -------------------------------------------------------------------------
+	// 9. Output parsers
+	// -------------------------------------------------------------------------
+	fmt.Println("\n--- 9. Output parsers ---")
 
 	str, _ := output.StrOutputParser{}.Parse("  Hello, golangchain!  ")
 	fmt.Println("Str:", str)

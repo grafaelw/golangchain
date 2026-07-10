@@ -6,6 +6,7 @@
 //   - ConversationBufferMemory  — full history, unbounded
 //   - ConversationWindowMemory  — sliding window of last k turns
 //   - ConversationSummaryMemory — compresses old turns via an LLM call
+//   - TokenBufferMemory         — keeps conversation trimmed to a token limit
 //   - Calculator                — recursive-descent arithmetic parser
 //   - FuncTool                  — wraps any function as a Tool
 //   - ToToolDefs / FindTool     — helpers for working with []Tool
@@ -147,9 +148,30 @@ func main() {
 	}
 
 	// -------------------------------------------------------------------------
-	// 6. Calculator tool
+	// 6. TokenBufferMemory — keeps conversation trimmed to a token limit
 	// -------------------------------------------------------------------------
-	fmt.Println("\n--- 6. Calculator tool ---")
+	fmt.Println("\n--- 6. TokenBufferMemory (max 40 tokens) ---")
+	tok := memory.NewTokenBufferMemory(40)
+	for _, turn := range [][2]string{
+		{"What is Go?", "A statically typed compiled language."},
+		{"Who made it?", "Google."},
+		{"When was it released?", "In 2009."},
+		{"Is it fast?", "Yes, comparable to C."},
+		{"How about generics?", "Go 1.18 introduced generics in 2022."},
+	} {
+		_ = tok.SaveContext(ctx, turn[0], turn[1])
+	}
+	tVars, _ := tok.LoadMemoryVariables(ctx)
+	tHistory := tVars["history"].([]schema.Message)
+	fmt.Printf("Token buffer (max 40 tokens): %d messages (oldest trimmed)\n", len(tHistory))
+	for _, msg := range tHistory {
+		fmt.Printf("  %-8s %s\n", msg.Role, msg.Content)
+	}
+
+	// -------------------------------------------------------------------------
+	// 7. Calculator tool
+	// -------------------------------------------------------------------------
+	fmt.Println("\n--- 7. Calculator tool ---")
 	calc := tools.Calculator{}
 	fmt.Printf("Calculator: %s\n", calc.Description())
 
@@ -171,9 +193,9 @@ func main() {
 	}
 
 	// -------------------------------------------------------------------------
-	// 7. FuncTool — wrap any function as a Tool
+	// 8. FuncTool — wrap any function as a Tool
 	// -------------------------------------------------------------------------
-	fmt.Println("\n--- 7. FuncTool ---")
+	fmt.Println("\n--- 8. FuncTool ---")
 	wordCountTool := tools.NewFuncTool(
 		"word_count",
 		"Counts the number of words in the input text.",
@@ -196,9 +218,9 @@ func main() {
 	fmt.Println("FuncTool word_count:", r)
 
 	// -------------------------------------------------------------------------
-	// 8. ToToolDefs / FindTool
+	// 9. ToToolDefs / FindTool
 	// -------------------------------------------------------------------------
-	fmt.Println("\n--- 8. ToToolDefs / FindTool ---")
+	fmt.Println("\n--- 9. ToToolDefs / FindTool ---")
 	allTools := []tools.Tool{calc, wordCountTool}
 	defs := tools.ToToolDefs(allTools)
 	for _, d := range defs {
