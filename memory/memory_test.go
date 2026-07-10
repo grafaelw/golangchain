@@ -189,6 +189,157 @@ func (m *mockSummaryLLM) Stream(_ context.Context, _ []schema.Message, _ ...llm.
 }
 func (m *mockSummaryLLM) ModelName() string { return "mock" }
 
+// ---------------------------------------------------------------------------
+// TokenBufferMemory
+// ---------------------------------------------------------------------------
+
+func TestTokenBufferMemory_Basic(t *testing.T) {
+	m := memory.NewTokenBufferMemory(1000)
+	m.SaveContext(ctx, "q1", "a1")
+	m.SaveContext(ctx, "q2", "a2")
+	vars, err := m.LoadMemoryVariables(ctx)
+	if err != nil {
+		t.Fatalf("LoadMemoryVariables: %v", err)
+	}
+	msgs := vars["history"].([]schema.Message)
+	if len(msgs) != 4 {
+		t.Fatalf("want 4 messages, got %d", len(msgs))
+	}
+}
+
+func TestTokenBufferMemory_Trim(t *testing.T) {
+	m := memory.NewTokenBufferMemory(20) // ~20 tokens
+	// Each "hello world from test" is ~24 chars = ~6 tokens
+	for i := 0; i < 10; i++ {
+		m.SaveContext(ctx, "hello world from test", "goodbye world from test")
+	}
+	vars, _ := m.LoadMemoryVariables(ctx)
+	msgs := vars["history"].([]schema.Message)
+	// With 20 messages * ~6 tokens = ~120 tokens, limit of 20 should trim to ~3-4 messages
+	if len(msgs) >= 10 {
+		t.Errorf("expected fewer messages after trimming, got %d", len(msgs))
+	}
+}
+
+func TestTokenBufferMemory_Clear(t *testing.T) {
+	m := memory.NewTokenBufferMemory(1000)
+	m.SaveContext(ctx, "q", "a")
+	m.Clear(ctx)
+	if len(m.Messages()) != 0 {
+		t.Error("expected empty after clear")
+	}
+}
+
+func TestTokenBufferMemory_Unlimited(t *testing.T) {
+	m := memory.NewTokenBufferMemory(0)
+	for i := 0; i < 20; i++ {
+		m.SaveContext(ctx, "q", "a")
+	}
+	if len(m.Messages()) != 40 {
+		t.Errorf("want 40 messages, got %d", len(m.Messages()))
+	}
+}
+
+func TestTokenBufferMemory_SaveMessages(t *testing.T) {
+	m := memory.NewTokenBufferMemory(1000)
+	msgs := []schema.Message{
+		schema.NewHumanMessage("h1"),
+		schema.NewAIMessage("a1"),
+	}
+	m.SaveMessages(ctx, msgs)
+	if len(m.Messages()) != 2 {
+		t.Fatalf("want 2 messages, got %d", len(m.Messages()))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ConversationEntityMemory
+// ---------------------------------------------------------------------------
+
+type mockEntityLLM struct {
+	response string
+}
+
+func (m *mockEntityLLM) Generate(_ context.Context, _ []schema.Message, _ ...llm.Option) (*schema.Generation, error) {
+	return &schema.Generation{Text: m.response, Message: schema.NewAIMessage(m.response)}, nil
+}
+func (m *mockEntityLLM) Stream(_ context.Context, _ []schema.Message, _ ...llm.Option) (<-chan schema.StreamChunk, error) {
+	ch := make(chan schema.StreamChunk, 1)
+	ch <- schema.StreamChunk{Text: m.response, Done: true}
+	close(ch)
+	return ch, nil
+}
+func (m *mockEntityLLM) ModelName() string { return "mock" }
+
+func TestEntityMemory_SaveAndLoad(t *testing.T) {
+	llm := &mockEntityLLM{response: "ENTITY: Alice\nSUMMARY: A developer who likes Go\nENTITY: Bob\nSUMMARY: A designer who asked about UI"}
+	m := memory.NewConversationEntityMemory(llm)
+	m.SaveContext(ctx, "Alice is a developer. What is Go?", "Go is a programming language.")
+	vars, err := m.LoadMemoryVariables(ctx)
+	if err != nil {
+		t.Fatalf("LoadMemoryVariables: %v", err)
+	}
+	msgs := vars["history"].([]schema.Message)
+	// Should have at least 1 system message (entity context) + 2 recent messages
+	if len(msgs) < 3 {
+		t.Errorf("want at least 3 messages, got %d", len(msgs))
+	}
+	// First message should be a system message with entity info
+	if msgs[0].Role != schema.RoleSystem {
+		t.Errorf("want system role for entity context, got %q", msgs[0].Role)
+	}
+}
+
+func TestEntityMemory_EntitySummary(t *testing.T) {
+	llm := &mockEntityLLM{response: "ENTITY: Go\nSUMMARY: A programming language\nENTITY: Docker\nSUMMARY: Container runtime"}
+	m := memory.NewConversationEntityMemory(llm)
+	m.SaveContext(ctx, "I use Go and Docker", "Both are great tools.")
+	summary := m.EntitySummary()
+	if len(summary) != 2 {
+		t.Errorf("want 2 entities, got %d: %v", len(summary), summary)
+	}
+	if _, ok := summary["Go"]; !ok {
+		t.Error("expected 'Go' entity")
+	}
+	if _, ok := summary["Docker"]; !ok {
+		t.Error("expected 'Docker' entity")
+	}
+}
+
+func TestEntityMemory_Clear(t *testing.T) {
+	llm := &mockEntityLLM{response: "ENTITY: X\nSUMMARY: Something"}
+	m := memory.NewConversationEntityMemory(llm)
+	m.SaveContext(ctx, "x info", "x answer")
+	m.Clear(ctx)
+	if len(m.Messages()) != 0 {
+		t.Error("expected empty messages after clear")
+	}
+	if len(m.EntitySummary()) != 0 {
+		t.Error("expected empty entities after clear")
+	}
+}
+
+func TestEntityMemory_NoEntities(t *testing.T) {
+	llm := &mockEntityLLM{response: "NONE"}
+	m := memory.NewConversationEntityMemory(llm)
+	m.SaveContext(ctx, "hello", "hi there")
+	if len(m.EntitySummary()) != 0 {
+		t.Errorf("expected 0 entities, got %d: %v", len(m.EntitySummary()), m.EntitySummary())
+	}
+}
+
+func TestEntityMemory_WindowCutoff(t *testing.T) {
+	llm := &mockEntityLLM{response: "NONE"}
+	m := memory.NewConversationEntityMemory(llm)
+	m.MaxRecent = 1
+	for i := 0; i < 10; i++ {
+		m.SaveContext(ctx, "q", "a")
+	}
+	if len(m.Messages()) > 2 {
+		t.Errorf("want at most 2 recent messages, got %d", len(m.Messages()))
+	}
+}
+
 func TestSummaryMemory_Basic(t *testing.T) {
 	llm := &mockSummaryLLM{summary: "User asked about Go, AI explained."}
 	m := memory.NewConversationSummaryMemory(llm)

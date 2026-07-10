@@ -1,17 +1,18 @@
 // Example: memory_and_tools
 //
-// Demonstrates the three Memory implementations and the built-in Tool
+// Demonstrates five Memory implementations and the built-in Tool
 // helpers in isolation (outside of an agent loop):
 //
 //   - ConversationBufferMemory  — full history, unbounded
 //   - ConversationWindowMemory  — sliding window of last k turns
 //   - ConversationSummaryMemory — compresses old turns via an LLM call
-//   - TokenBufferMemory         — keeps conversation trimmed to a token limit
+//   - TokenBufferMemory         — keeps history trimmed to a token budget
+//   - ConversationEntityMemory  — extracts per-entity summaries
 //   - Calculator                — recursive-descent arithmetic parser
 //   - FuncTool                  — wraps any function as a Tool
 //   - ToToolDefs / FindTool     — helpers for working with []Tool
 //
-// ConversationSummaryMemory needs a real LLM to compress old turns.
+// ConversationSummaryMemory and ConversationEntityMemory need a real LLM.
 //
 // # Usage — Azure AI Foundry (default)
 //

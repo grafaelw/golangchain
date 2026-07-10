@@ -490,3 +490,72 @@ func TestPromptTemplateFormatter(t *testing.T) {
 		t.Errorf("content mismatch: %q", msgs[0].Content)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FallbackChain
+// ---------------------------------------------------------------------------
+
+func TestFallbackChain_Success(t *testing.T) {
+	r := chain.NewFuncRunnable("ok", func(_ context.Context, in any) (any, error) {
+		return "ok-" + in.(string), nil
+	})
+	fb := chain.NewFallbackChain("test", r)
+	got, err := fb.Invoke(context.Background(), "input")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.(string) != "ok-input" {
+		t.Errorf("want ok-input, got %q", got)
+	}
+}
+
+func TestFallbackChain_Fallback(t *testing.T) {
+	primary := chain.NewFuncRunnable("fail", func(_ context.Context, _ any) (any, error) {
+		return nil, fmt.Errorf("boom")
+	})
+	backup := chain.NewFuncRunnable("ok", func(_ context.Context, _ any) (any, error) {
+		return "fallback", nil
+	})
+	fb := chain.NewFallbackChain("test", primary, backup)
+	got, err := fb.Invoke(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.(string) != "fallback" {
+		t.Errorf("want fallback, got %q", got)
+	}
+}
+
+func TestFallbackChain_AllFail(t *testing.T) {
+	r1 := chain.NewFuncRunnable("f1", func(_ context.Context, _ any) (any, error) {
+		return nil, fmt.Errorf("fail1")
+	})
+	r2 := chain.NewFuncRunnable("f2", func(_ context.Context, _ any) (any, error) {
+		return nil, fmt.Errorf("fail2")
+	})
+	fb := chain.NewFallbackChain("test", r1, r2)
+	_, err := fb.Invoke(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestFallbackChain_Stream(t *testing.T) {
+	// FallbackChain.Stream tries the Stream() error return from each runnable.
+	// A FuncRunnable that returns an error from Invoke will emit it on the
+	// channel, but the Stream() call itself succeeds. For true stream-level
+	// fallback testing, use a runnable whose Stream() returns an error.
+	backup := chain.NewFuncRunnable("ok", func(_ context.Context, _ any) (any, error) {
+		return "stream-ok", nil
+	})
+	fb := chain.NewFallbackChain("test", backup)
+	ch, err := fb.Stream(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for c := range ch {
+		if c.Err != nil {
+			t.Fatalf("unexpected stream error: %v", c.Err)
+		}
+	}
+}

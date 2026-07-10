@@ -303,3 +303,85 @@ func TestSimilaritySearch_ScoreOrdering(t *testing.T) {
 		t.Errorf("top result should be doc_a, got %q", results[0].PageContent)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// MMRRerank
+// ---------------------------------------------------------------------------
+
+func TestMMRRerank_Empty(t *testing.T) {
+	result := vectorstore.MMRRerank(nil, nil, nil, 5, 0.5)
+	if len(result) != 0 {
+		t.Errorf("expected empty, got %d", len(result))
+	}
+}
+
+func TestMMRRerank_Single(t *testing.T) {
+	candidates := []schema.Document{{PageContent: "doc1"}}
+	queryVec := []float64{1.0}
+	candidateVecs := [][]float64{{1.0}}
+
+	result := vectorstore.MMRRerank(candidates, queryVec, candidateVecs, 5, 0.5)
+	if len(result) != 1 {
+		t.Errorf("want 1, got %d", len(result))
+	}
+}
+
+func TestMMRRerank_Deduplicates(t *testing.T) {
+	candidates := []schema.Document{
+		{PageContent: "Go programming"},
+		{PageContent: "Python programming"},
+	}
+	queryVec := []float64{1.0}
+	candidateVecs := [][]float64{
+		{1.0}, // close to query
+		{0.5}, // farther from query
+	}
+
+	result := vectorstore.MMRRerank(candidates, queryVec, candidateVecs, 2, 0.7)
+	if len(result) != 2 {
+		t.Errorf("want 2, got %d", len(result))
+	}
+	if result[0].PageContent != "Go programming" {
+		t.Errorf("want Go first, got %q", result[0].PageContent)
+	}
+}
+
+func TestMMRRerank_MismatchedLengths(t *testing.T) {
+	candidates := []schema.Document{{PageContent: "doc1"}}
+	queryVec := []float64{1.0}
+	candidateVecs := [][]float64{{1.0}, {2.0}} // length mismatch
+
+	result := vectorstore.MMRRerank(candidates, queryVec, candidateVecs, 5, 0.5)
+	if len(result) != 1 {
+		t.Errorf("expect fallback to candidates, got %d", len(result))
+	}
+}
+
+func TestMMRRerank_LambdaOne(t *testing.T) {
+	// lambda=1 means pure relevance, no diversity penalty
+	candidates := []schema.Document{
+		{PageContent: "Go"},
+		{PageContent: "Python"},
+		{PageContent: "Rust"},
+	}
+	queryVec := []float64{1.0, 1.0, 1.0}
+	candidateVecs := [][]float64{
+		{1.0, 1.0, 1.0}, // perfect match
+		{0.5, 0.5, 0.5}, // mediocre
+		{0.0, 0.0, 0.0}, // orthogonal
+	}
+
+	result := vectorstore.MMRRerank(candidates, queryVec, candidateVecs, 3, 1.0)
+	if len(result) != 3 {
+		t.Errorf("want 3, got %d", len(result))
+	}
+	if result[0].PageContent != "Go" {
+		t.Errorf("want Go first (most similar), got %q", result[0].PageContent)
+	}
+	if result[1].PageContent != "Python" {
+		t.Errorf("want Python second, got %q", result[1].PageContent)
+	}
+	if result[2].PageContent != "Rust" {
+		t.Errorf("want Rust third, got %q", result[2].PageContent)
+	}
+}

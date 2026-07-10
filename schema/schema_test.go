@@ -108,3 +108,127 @@ func TestAgentTypes(t *testing.T) {
 		t.Errorf("AgentFinish.Output mismatch")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ContentPart (multimodal)
+// ---------------------------------------------------------------------------
+
+func TestContentPart_TextOnly(t *testing.T) {
+	msg := schema.Message{
+		Role: schema.RoleHuman,
+		ContentParts: []schema.ContentPart{
+			{Type: "text", Text: "Hello world"},
+		},
+	}
+	if len(msg.ContentParts) != 1 {
+		t.Fatalf("want 1 part, got %d", len(msg.ContentParts))
+	}
+	if msg.ContentParts[0].Text != "Hello world" {
+		t.Errorf("text mismatch")
+	}
+}
+
+func TestContentPart_ImageURL(t *testing.T) {
+	msg := schema.Message{
+		Role: schema.RoleHuman,
+		ContentParts: []schema.ContentPart{
+			{Type: "text", Text: "What is this?"},
+			{
+				Type:     "image_url",
+				ImageURL: &schema.ImageURL{URL: "https://example.com/img.png", Detail: "high"},
+			},
+		},
+	}
+	if msg.ContentParts[1].ImageURL.URL != "https://example.com/img.png" {
+		t.Errorf("URL mismatch")
+	}
+	if msg.ContentParts[1].ImageURL.Detail != "high" {
+		t.Errorf("detail mismatch")
+	}
+}
+
+func TestContentPart_String(t *testing.T) {
+	msg := schema.Message{
+		Role: schema.RoleHuman,
+		ContentParts: []schema.ContentPart{
+			{Type: "text", Text: "Describe"},
+			{Type: "image_url", ImageURL: &schema.ImageURL{URL: "http://x.com/a.png"}},
+		},
+	}
+	s := msg.String()
+	if s == "" {
+		t.Error("expected non-empty string")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cost tracking
+// ---------------------------------------------------------------------------
+
+func TestCostPerToken_Multiply(t *testing.T) {
+	c := schema.CostPerToken{PromptPrice: 0.01, CompletionPrice: 0.03}
+	cost := c.Multiply(1000, 500)
+	if cost != 0.025 {
+		t.Errorf("want 0.025, got %f", cost)
+	}
+}
+
+func TestTokenUsage_EstimateCost_KnownModel(t *testing.T) {
+	u := schema.TokenUsage{PromptTokens: 1000, CompletionTokens: 1000}
+	cost := u.EstimateCost("gpt-4o")
+	if cost <= 0 {
+		t.Error("expected positive cost")
+	}
+	// 1000 prompt $0.0025 + 1000 completion $0.010 = $0.0125
+	if cost != 0.0125 {
+		t.Errorf("want 0.0125, got %f", cost)
+	}
+}
+
+func TestTokenUsage_EstimateCost_UnknownModel(t *testing.T) {
+	u := schema.TokenUsage{PromptTokens: 1000, CompletionTokens: 500}
+	cost := u.EstimateCost("unknown-model-v2")
+	if cost != 0 {
+		t.Errorf("want 0, got %f", cost)
+	}
+}
+
+func TestModelPricing_HasEntries(t *testing.T) {
+	if len(schema.ModelPricing) < 10 {
+		t.Errorf("want at least 10 pricing entries, got %d", len(schema.ModelPricing))
+	}
+	for name, price := range schema.ModelPricing {
+		if price.PromptPrice < 0 || price.CompletionPrice < 0 {
+			t.Errorf("model %q has negative pricing", name)
+		}
+	}
+}
+
+func TestGeneration_EstimatedCost(t *testing.T) {
+	gen := &schema.Generation{
+		Text:          "answer",
+		EstimatedCost: 0.0125,
+		Usage:         schema.TokenUsage{PromptTokens: 100, CompletionTokens: 50},
+	}
+	if gen.EstimatedCost != 0.0125 {
+		t.Errorf("EstimatedCost mismatch")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// StreamChunk ToolCalls
+// ---------------------------------------------------------------------------
+
+func TestStreamChunk_ToolCalls(t *testing.T) {
+	tc := schema.ToolCall{ID: "call-1", Name: "calc", Arguments: json.RawMessage(`{"x":1}`)}
+	chunk := schema.StreamChunk{
+		Done:      true,
+		ToolCalls: []schema.ToolCall{tc},
+	}
+	if len(chunk.ToolCalls) != 1 {
+		t.Fatalf("want 1 tool call, got %d", len(chunk.ToolCalls))
+	}
+	if chunk.ToolCalls[0].Name != "calc" {
+		t.Errorf("name mismatch")
+	}
+}
