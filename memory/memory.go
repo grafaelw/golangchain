@@ -318,3 +318,299 @@ func (m *ConversationSummaryMemory) SaveMessages(ctx context.Context, msgs []sch
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// TokenBufferMemory — keeps a window bounded by token count
+// ---------------------------------------------------------------------------
+
+// TokenBufferMemory keeps the conversation trimmed to a maximum token count.
+// Unlike ConversationWindowMemory (which counts messages), this trims by
+// estimated token count so it respects the model's context window.
+//
+//	// Keep at most 2000 tokens of history
+//	mem := memory.NewTokenBufferMemory(2000)
+type TokenBufferMemory struct {
+	mu             sync.RWMutex
+	messages       []schema.Message
+	MaxTokens      int
+	HistoryKey     string
+	ReturnMessages bool
+}
+
+// NewTokenBufferMemory creates a token-buffer memory with the given limit.
+func NewTokenBufferMemory(maxTokens int) *TokenBufferMemory {
+	return &TokenBufferMemory{
+		MaxTokens:      maxTokens,
+		HistoryKey:     "history",
+		ReturnMessages: true,
+	}
+}
+
+func (m *TokenBufferMemory) Messages() []schema.Message {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cp := make([]schema.Message, len(m.messages))
+	copy(cp, m.messages)
+	return cp
+}
+
+func (m *TokenBufferMemory) LoadMemoryVariables(_ context.Context) (map[string]any, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	trimmed := m.trim()
+	if m.ReturnMessages {
+		return map[string]any{m.HistoryKey: trimmed}, nil
+	}
+	var sb strings.Builder
+	for _, msg := range trimmed {
+		sb.WriteString(string(msg.Role) + ": " + msg.Content + "\n")
+	}
+	return map[string]any{m.HistoryKey: strings.TrimRight(sb.String(), "\n")}, nil
+}
+
+func (m *TokenBufferMemory) SaveContext(_ context.Context, humanInput, aiOutput string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages,
+		schema.NewHumanMessage(humanInput),
+		schema.NewAIMessage(aiOutput),
+	)
+	return nil
+}
+
+func (m *TokenBufferMemory) Clear(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = nil
+	return nil
+}
+
+func (m *TokenBufferMemory) SaveMessages(_ context.Context, msgs []schema.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, msgs...)
+	return nil
+}
+
+// trim returns the messages trimmed to fit MaxTokens, dropping from the front.
+func (m *TokenBufferMemory) trim() []schema.Message {
+	if m.MaxTokens <= 0 {
+		cp := make([]schema.Message, len(m.messages))
+		copy(cp, m.messages)
+		return cp
+	}
+	total := 0
+	for _, msg := range m.messages {
+		total += estimateTokens(msg.Content)
+	}
+	if total <= m.MaxTokens {
+		cp := make([]schema.Message, len(m.messages))
+		copy(cp, m.messages)
+		return cp
+	}
+	// Drop from the front until we fit.
+	start := 0
+	for start < len(m.messages) {
+		start++
+		if start >= len(m.messages) {
+			break
+		}
+		remaining := 0
+		for _, m := range m.messages[start:] {
+			remaining += estimateTokens(m.Content)
+		}
+		if remaining <= m.MaxTokens {
+			break
+		}
+	}
+	cp := make([]schema.Message, len(m.messages)-start)
+	copy(cp, m.messages[start:])
+	return cp
+}
+
+// estimateTokens is a fast approximation: ~4 characters per token.
+func estimateTokens(s string) int {
+	return len(s) / 4
+}
+
+// ---------------------------------------------------------------------------
+// ConversationEntityMemory — entity-aware conversation memory
+// ---------------------------------------------------------------------------
+
+// ConversationEntityMemory uses an LLM to extract named entities from each
+// turn and maintain summaries per entity. When loading, it injects relevant
+// entity context alongside the recent conversation.
+//
+//	mem := memory.NewConversationEntityMemory(myLLM)
+type ConversationEntityMemory struct {
+	mu         sync.Mutex
+	llm        llm.LLM
+	messages   []schema.Message
+	entities   map[string]string // entity name → summary
+	HistoryKey string
+	MaxRecent  int // raw turns to keep (default 4)
+}
+
+// NewConversationEntityMemory creates an entity memory.
+func NewConversationEntityMemory(model llm.LLM) *ConversationEntityMemory {
+	return &ConversationEntityMemory{
+		llm:        model,
+		entities:   make(map[string]string),
+		HistoryKey: "history",
+		MaxRecent:  4,
+	}
+}
+
+func (m *ConversationEntityMemory) Messages() []schema.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.buildMessages()
+}
+
+func (m *ConversationEntityMemory) LoadMemoryVariables(_ context.Context) (map[string]any, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return map[string]any{m.HistoryKey: m.buildMessages()}, nil
+}
+
+func (m *ConversationEntityMemory) buildMessages() []schema.Message {
+	var msgs []schema.Message
+
+	entityCtx := m.entityContext()
+	if entityCtx != "" {
+		msgs = append(msgs, schema.NewSystemMessage("Entities mentioned in conversation:\n"+entityCtx))
+	}
+
+	recent := m.recent()
+	msgs = append(msgs, recent...)
+	return msgs
+}
+
+func (m *ConversationEntityMemory) entityContext() string {
+	if len(m.entities) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for name, summary := range m.entities {
+		fmt.Fprintf(&sb, "%s: %s\n", name, summary)
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func (m *ConversationEntityMemory) recent() []schema.Message {
+	n := len(m.messages)
+	if m.MaxRecent > 0 {
+		start := n - m.MaxRecent*2
+		if start < 0 {
+			start = 0
+		}
+		cp := make([]schema.Message, n-start)
+		copy(cp, m.messages[start:])
+		return cp
+	}
+	cp := make([]schema.Message, n)
+	copy(cp, m.messages)
+	return cp
+}
+
+func (m *ConversationEntityMemory) SaveContext(ctx context.Context, humanInput, aiOutput string) error {
+	m.mu.Lock()
+	m.messages = append(m.messages,
+		schema.NewHumanMessage(humanInput),
+		schema.NewAIMessage(aiOutput),
+	)
+	m.mu.Unlock()
+
+	return m.extractEntities(ctx, humanInput+"\n"+aiOutput)
+}
+
+func (m *ConversationEntityMemory) Clear(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = nil
+	m.entities = make(map[string]string)
+	return nil
+}
+
+func (m *ConversationEntityMemory) SaveMessages(ctx context.Context, msgs []schema.Message) error {
+	m.mu.Lock()
+	m.messages = append(m.messages, msgs...)
+	m.mu.Unlock()
+
+	var sb strings.Builder
+	for _, msg := range msgs {
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n")
+	}
+	return m.extractEntities(ctx, sb.String())
+}
+
+func (m *ConversationEntityMemory) extractEntities(ctx context.Context, text string) error {
+	prompt := fmt.Sprintf(`Extract all named entities (people, places, organisations, products, concepts) from the text below.
+For each entity, provide a concise one-sentence summary of what was said about it.
+Respond in this format:
+ENTITY: <name>
+SUMMARY: <one-sentence summary>
+ENTITY: <name>
+SUMMARY: <one-sentence summary>
+
+If no entities are mentioned, respond with "NONE".
+
+Text:
+%s`, text)
+
+	gen, err := m.llm.Generate(ctx, []schema.Message{
+		schema.NewHumanMessage(prompt),
+	})
+	if err != nil {
+		return fmt.Errorf("memory: entity extract: %w", err)
+	}
+
+	parsed := parseEntities(strings.TrimSpace(gen.Text))
+	m.mu.Lock()
+	for name, summary := range parsed {
+		if existing, ok := m.entities[name]; ok {
+			m.entities[name] = existing + " " + summary
+		} else {
+			m.entities[name] = summary
+		}
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// EntitySummary returns a copy of the entity->summary map.
+func (m *ConversationEntityMemory) EntitySummary() map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make(map[string]string, len(m.entities))
+	for k, v := range m.entities {
+		cp[k] = v
+	}
+	return cp
+}
+
+func parseEntities(text string) map[string]string {
+	if text == "NONE" || text == "" {
+		return nil
+	}
+	result := make(map[string]string)
+	var currentEntity, currentSummary string
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToUpper(line), "ENTITY:") {
+			if currentEntity != "" && currentSummary != "" {
+				result[currentEntity] = currentSummary
+			}
+			currentEntity = strings.TrimSpace(line[7:]) // strip "ENTITY:"
+			currentSummary = ""
+		} else if strings.HasPrefix(strings.ToUpper(line), "SUMMARY:") {
+			currentSummary = strings.TrimSpace(line[8:])
+		}
+	}
+	if currentEntity != "" && currentSummary != "" {
+		result[currentEntity] = currentSummary
+	}
+	return result
+}

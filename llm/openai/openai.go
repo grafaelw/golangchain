@@ -130,6 +130,12 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 		})
 	}
 
+	modelName := l.cfg.model
+	if o.Model != nil {
+		modelName = *o.Model
+	}
+	gen.EstimatedCost = gen.Usage.EstimateCost(modelName)
+
 	return gen, nil
 }
 
@@ -138,7 +144,8 @@ func (l *LLM) Generate(ctx context.Context, messages []schema.Message, opts ...l
 // ---------------------------------------------------------------------------
 
 // Stream performs a streaming chat-completions call.
-// The returned channel is closed after the final chunk or on error.
+// Text deltas and tool-call deltas are emitted as separate StreamChunks.
+// The final chunk carries Done=true and accumulated usage/tool calls.
 func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm.Option) (<-chan schema.StreamChunk, error) {
 	o := llm.Apply(opts)
 	params := l.buildParams(messages, o)
@@ -150,18 +157,82 @@ func (l *LLM) Stream(ctx context.Context, messages []schema.Message, opts ...llm
 		defer close(ch)
 		defer func() { _ = stream.Close() }()
 
+		type accumulating struct {
+			id        string
+			name      string
+			arguments string
+		}
+		var acc []accumulating
+
+		var totalUsage schema.TokenUsage
+
 		for stream.Next() {
 			chunk := stream.Current()
 			if len(chunk.Choices) == 0 {
 				continue
 			}
-			ch <- schema.StreamChunk{Text: chunk.Choices[0].Delta.Content}
+			delta := chunk.Choices[0].Delta
+
+			text := delta.Content
+
+			for _, tcd := range delta.ToolCalls {
+				idx := int(tcd.Index)
+				for len(acc) <= idx {
+					acc = append(acc, accumulating{})
+				}
+				a := &acc[idx]
+				if tcd.ID != "" {
+					a.id = tcd.ID
+				}
+				if tcd.Function.Name != "" {
+					a.name = tcd.Function.Name
+				}
+				a.arguments += tcd.Function.Arguments
+			}
+
+			if len(delta.ToolCalls) > 0 {
+				tcd := delta.ToolCalls[0]
+				ch <- schema.StreamChunk{
+					Text: text,
+					ToolCallDelta: &schema.ToolCallDelta{
+						Index:     int(tcd.Index),
+						ID:        tcd.ID,
+						Name:      tcd.Function.Name,
+						Arguments: tcd.Function.Arguments,
+					},
+				}
+			} else {
+				ch <- schema.StreamChunk{Text: text}
+			}
+
+			if chunk.Usage.TotalTokens > 0 {
+				totalUsage = schema.TokenUsage{
+					PromptTokens:     int(chunk.Usage.PromptTokens),
+					CompletionTokens: int(chunk.Usage.CompletionTokens),
+					TotalTokens:      int(chunk.Usage.TotalTokens),
+				}
+			}
 		}
+
 		if err := stream.Err(); err != nil {
 			ch <- schema.StreamChunk{Err: fmt.Errorf("openai: stream recv: %w", err)}
 			return
 		}
-		ch <- schema.StreamChunk{Done: true}
+
+		done := schema.StreamChunk{Done: true, Usage: totalUsage}
+
+		for _, a := range acc {
+			if a.id != "" {
+				done.ToolCalls = append(done.ToolCalls, schema.ToolCall{
+					ID:        a.id,
+					Type:      "function",
+					Name:      a.name,
+					Arguments: json.RawMessage(a.arguments),
+				})
+			}
+		}
+
+		ch <- done
 	}()
 
 	return ch, nil

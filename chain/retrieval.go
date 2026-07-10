@@ -1,11 +1,13 @@
 // This file adds retrieval-augmented and summarization chains that live
 // alongside LLMChain, SequentialChain, MapChain, and RouterChain.
 //
-//   - RetrievalQAChain:      RAG — retrieve documents, stuff them into a
-//                            prompt, ask the LLM.
-//   - MapReduceSummarizer:   summarise each chunk in parallel, then reduce.
-//   - RefineSummarizer:      seed a summary and iteratively refine it chunk
-//                            by chunk. Best when order matters.
+//   - RetrievalQAChain:             RAG — retrieve documents, stuff them into a
+//                                   prompt, ask the LLM.
+//   - ConversationalRetrievalChain: Multi-turn RAG with question reformulation
+//                                   and chat history.
+//   - MapReduceSummarizer:          summarise each chunk in parallel, then reduce.
+//   - RefineSummarizer:             seed a summary and iteratively refine it chunk
+//                                   by chunk. Best when order matters.
 
 package chain
 
@@ -141,6 +143,230 @@ func renderRAGPrompt(tmpl, question string, docs []schema.Document) string {
 	p := strings.ReplaceAll(tmpl, "{{ .context }}", strings.TrimSpace(ctx.String()))
 	p = strings.ReplaceAll(p, "{{ .question }}", question)
 	return p
+}
+
+// ---------------------------------------------------------------------------
+// ConversationalRetrievalChain — multi-turn RAG with question reformulation
+// ---------------------------------------------------------------------------
+
+// ConversationalRetrievalChain extends RAG to multi-turn conversations.
+// Each new question is reformulated into a standalone query using the chat
+// history, then documents are retrieved and an answer is generated with the
+// full context.
+//
+//	chain := NewConversationalRetrievalChain(retriever, model,
+//	    WithMemory(memory.NewConversationBufferMemory()),
+//	)
+//	ans, _ := chain.Invoke(ctx, "Explain more about that.")
+type ConversationalRetrievalChain struct {
+	Retriever      retriever.Retriever
+	LLM            llm.LLM
+	LLMOptions     []llm.Option
+	Memory         Memory
+	CondensePrompt string
+	AnswerPrompt   string
+	ReturnSource   bool
+	Name           string
+}
+
+// Memory is a minimal interface used by ConversationalRetrievalChain.
+// Any memory.Memory implementation satisfies this interface.
+type Memory interface {
+	LoadMemoryVariables(ctx context.Context) (map[string]any, error)
+	SaveContext(ctx context.Context, humanInput, aiOutput string) error
+}
+
+// DefaultCondenseQuestionPrompt reformulates a follow-up question given chat history.
+const DefaultCondenseQuestionPrompt = `Given the following conversation and a follow-up question, rephrase the follow-up question to be a standalone question that captures all needed context from the conversation.
+
+Chat History:
+{{ .chat_history }}
+
+Follow-up question: {{ .question }}
+
+Standalone question:`
+
+// DefaultConversationalAnswerPrompt answers a question with retrieved context.
+const DefaultConversationalAnswerPrompt = `You are a helpful assistant. Answer the question using only the provided context. If the answer is not in the context, say you don't know.
+
+Context:
+{{ .context }}
+
+Question: {{ .question }}
+
+Answer:`
+
+// ConvRetrievalOption configures a ConversationalRetrievalChain.
+type ConvRetrievalOption func(*ConversationalRetrievalChain)
+
+// WithMemory sets the conversation memory for the chain.
+func WithMemory(mem Memory) ConvRetrievalOption {
+	return func(c *ConversationalRetrievalChain) { c.Memory = mem }
+}
+
+// WithCondensePrompt overrides the question reformulation prompt.
+func WithCondensePrompt(p string) ConvRetrievalOption {
+	return func(c *ConversationalRetrievalChain) { c.CondensePrompt = p }
+}
+
+// WithAnswerPrompt overrides the answer-generation prompt.
+func WithAnswerPrompt(p string) ConvRetrievalOption {
+	return func(c *ConversationalRetrievalChain) { c.AnswerPrompt = p }
+}
+
+// NewConversationalRetrievalChain creates a multi-turn RAG chain.
+func NewConversationalRetrievalChain(r retriever.Retriever, model llm.LLM, opts ...ConvRetrievalOption) *ConversationalRetrievalChain {
+	c := &ConversationalRetrievalChain{
+		Retriever:      r,
+		LLM:            model,
+		CondensePrompt: DefaultCondenseQuestionPrompt,
+		AnswerPrompt:   DefaultConversationalAnswerPrompt,
+		Name:           "ConversationalRetrievalChain",
+	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
+}
+
+func (c *ConversationalRetrievalChain) Invoke(ctx context.Context, input any) (any, error) {
+	question, err := extractQuestion(input)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", c.Name, err)
+	}
+
+	standalone := question
+
+	if c.Memory != nil {
+		vars, err := c.Memory.LoadMemoryVariables(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: load memory: %w", c.Name, err)
+		}
+		history, ok := vars["history"]
+		if ok {
+			historyStr := formatChatHistory(history)
+			if historyStr != "" {
+				p := strings.ReplaceAll(c.CondensePrompt, "{{ .chat_history }}", historyStr)
+				p = strings.ReplaceAll(p, "{{ .question }}", question)
+				gen, err := c.LLM.Generate(ctx, []schema.Message{schema.NewHumanMessage(p)}, c.LLMOptions...)
+				if err != nil {
+					return nil, fmt.Errorf("%s: condense: %w", c.Name, err)
+				}
+				standalone = strings.TrimSpace(gen.Text)
+			}
+		}
+	}
+
+	docs, err := c.Retriever.GetRelevantDocuments(ctx, standalone)
+	if err != nil {
+		return nil, fmt.Errorf("%s: retrieve: %w", c.Name, err)
+	}
+
+	prompt := renderRAGPrompt(c.AnswerPrompt, question, docs)
+	gen, err := c.LLM.Generate(ctx, []schema.Message{schema.NewHumanMessage(prompt)}, c.LLMOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: llm: %w", c.Name, err)
+	}
+	answer := strings.TrimSpace(gen.Text)
+
+	if c.Memory != nil {
+		_ = c.Memory.SaveContext(ctx, question, answer)
+	}
+
+	if c.ReturnSource {
+		return map[string]any{"answer": answer, "sources": docs, "standalone_question": standalone}, nil
+	}
+	return answer, nil
+}
+
+func (c *ConversationalRetrievalChain) Stream(ctx context.Context, input any) (<-chan schema.StreamChunk, error) {
+	question, err := extractQuestion(input)
+	if err != nil {
+		return nil, err
+	}
+
+	standalone := question
+	if c.Memory != nil {
+		vars, err := c.Memory.LoadMemoryVariables(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if history, ok := vars["history"]; ok {
+			historyStr := formatChatHistory(history)
+			if historyStr != "" {
+				p := strings.ReplaceAll(c.CondensePrompt, "{{ .chat_history }}", historyStr)
+				p = strings.ReplaceAll(p, "{{ .question }}", question)
+				gen, err := c.LLM.Generate(ctx, []schema.Message{schema.NewHumanMessage(p)}, c.LLMOptions...)
+				if err != nil {
+					return nil, err
+				}
+				standalone = strings.TrimSpace(gen.Text)
+			}
+		}
+	}
+
+	docs, err := c.Retriever.GetRelevantDocuments(ctx, standalone)
+	if err != nil {
+		return nil, err
+	}
+
+	prompt := renderRAGPrompt(c.AnswerPrompt, question, docs)
+	llmCh, err := c.LLM.Stream(ctx, []schema.Message{schema.NewHumanMessage(prompt)}, c.LLMOptions...)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(chan schema.StreamChunk, 32)
+	go func() {
+		defer close(out)
+		var answer strings.Builder
+		for chunk := range llmCh {
+			if chunk.Err != nil {
+				out <- chunk
+				return
+			}
+			answer.WriteString(chunk.Text)
+			chunk.Value = chunk.Text
+			out <- chunk
+		}
+		if c.Memory != nil {
+			_ = c.Memory.SaveContext(ctx, question, answer.String())
+		}
+	}()
+	return out, nil
+}
+
+func (c *ConversationalRetrievalChain) Pipe(next Runnable) Runnable {
+	return &pipeRunnable{first: c, second: next}
+}
+
+func (c *ConversationalRetrievalChain) Batch(ctx context.Context, inputs []any) ([]any, error) {
+	return RunBatch(ctx, c, inputs)
+}
+
+func formatChatHistory(history any) string {
+	switch v := history.(type) {
+	case string:
+		return v
+	case []schema.Message:
+		var sb strings.Builder
+		for _, m := range v {
+			sb.WriteString(string(m.Role))
+			sb.WriteString(": ")
+			sb.WriteString(m.Content)
+			sb.WriteString("\n")
+		}
+		return strings.TrimSpace(sb.String())
+	case []any:
+		var sb strings.Builder
+		for _, item := range v {
+			sb.WriteString(fmt.Sprint(item))
+			sb.WriteString("\n")
+		}
+		return strings.TrimSpace(sb.String())
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 // ---------------------------------------------------------------------------

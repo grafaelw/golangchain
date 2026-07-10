@@ -183,6 +183,98 @@ func (s *InMemoryVectorStore) Close() error {
 	return nil
 }
 
+// MaximalMarginalRelevanceSearch fetches fetchK candidates and re-ranks
+// them to balance relevance (lambda) against diversity.
+func (s *InMemoryVectorStore) MaximalMarginalRelevanceSearch(ctx context.Context, query string, k int, fetchK int, lambda float64) ([]schema.Document, error) {
+	qv, err := s.embedder.EmbedQuery(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("vectorstore: embed query: %w", err)
+	}
+	return s.maximalMarginalRelevanceSearchByVector(ctx, qv, k, fetchK, lambda)
+}
+
+func (s *InMemoryVectorStore) maximalMarginalRelevanceSearchByVector(_ context.Context, qv []float64, k int, fetchK int, lambda float64) ([]schema.Document, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.entries) == 0 {
+		return nil, nil
+	}
+
+	type scored struct {
+		score float64
+		idx   int
+	}
+
+	candidates := make([]scored, 0, len(s.entries))
+	for i, e := range s.entries {
+		sim, err := cosineSimilarity(qv, e.vector)
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, scored{score: sim, idx: i})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	if fetchK > len(candidates) {
+		fetchK = len(candidates)
+	}
+	if k > fetchK {
+		k = fetchK
+	}
+
+	selected := make([]int, 0, k)
+	for len(selected) < k {
+		bestScore := -1.0
+		bestIdx := -1
+		for i := 0; i < fetchK; i++ {
+			c := candidates[i]
+			skip := false
+			for _, sel := range selected {
+				if c.idx == sel {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+
+			relevance := c.score
+			diversity := 0.0
+			for _, sel := range selected {
+				sim, err := cosineSimilarity(s.entries[c.idx].vector, s.entries[sel].vector)
+				if err != nil {
+					continue
+				}
+				if sim > diversity {
+					diversity = sim
+				}
+			}
+
+			mmr := lambda*relevance - (1-lambda)*diversity
+			if mmr > bestScore {
+				bestScore = mmr
+				bestIdx = i
+			}
+		}
+		if bestIdx < 0 {
+			break
+		}
+		selected = append(selected, candidates[bestIdx].idx)
+	}
+
+	out := make([]schema.Document, len(selected))
+	for i, idx := range selected {
+		out[i] = s.entries[idx].doc
+		out[i].Score, _ = cosineSimilarity(qv, s.entries[idx].vector)
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // Cosine similarity
 // ---------------------------------------------------------------------------
@@ -202,6 +294,77 @@ func cosineSimilarity(a, b []float64) (float64, error) {
 		return 0, nil
 	}
 	return dot / denom, nil
+}
+
+// MMRRerank re-ranks a set of candidate documents using Maximal Marginal
+// Relevance to balance relevance and diversity. It returns k documents.
+//
+//	candidates — documents from SimilaritySearch(fetchK)
+//	queryVector — embedding of the query string
+//	candidateVectors — embedding for each candidate (same order)
+//	k — number of documents to return
+//	lambda — relevance weight (1.0 = pure relevance, 0.0 = maximum diversity)
+//
+// Use this with any VectorStore if you have access to the document vectors.
+func MMRRerank(candidates []schema.Document, queryVector []float64, candidateVectors [][]float64, k int, lambda float64) []schema.Document {
+	if len(candidates) == 0 || len(candidateVectors) != len(candidates) {
+		return candidates
+	}
+	if k > len(candidates) {
+		k = len(candidates)
+	}
+	if k == 0 {
+		return nil
+	}
+
+	selected := make([]int, 0, k)
+	for len(selected) < k {
+		bestScore := -1.0
+		bestIdx := -1
+
+		for i := range candidates {
+			skip := false
+			for _, sel := range selected {
+				if i == sel {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+
+			relevance, err := cosineSimilarity(queryVector, candidateVectors[i])
+			if err != nil {
+				continue
+			}
+			diversity := 0.0
+			for _, sel := range selected {
+				sim, err := cosineSimilarity(candidateVectors[i], candidateVectors[sel])
+				if err != nil {
+					continue
+				}
+				if sim > diversity {
+					diversity = sim
+				}
+			}
+			mmr := lambda*relevance - (1-lambda)*diversity
+			if mmr > bestScore {
+				bestScore = mmr
+				bestIdx = i
+			}
+		}
+		if bestIdx < 0 {
+			break
+		}
+		selected = append(selected, bestIdx)
+	}
+
+	out := make([]schema.Document, len(selected))
+	for i, idx := range selected {
+		out[i] = candidates[idx]
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
