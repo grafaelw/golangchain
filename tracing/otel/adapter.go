@@ -92,20 +92,6 @@ func (h *Handler) endSpan(ctx context.Context) trace.Span {
 	return span
 }
 
-func (h *Handler) failSpan(ctx context.Context, err error) {
-	runID := callbacks.RunIDFromContext(ctx)
-	if runID == "" {
-		return
-	}
-	span, ok := h.getSpan(runID)
-	if !ok {
-		return
-	}
-	span.SetStatus(codes.Error, err.Error())
-	span.End()
-	h.deleteSpan(runID)
-}
-
 func (h *Handler) getSpan(id string) (trace.Span, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
