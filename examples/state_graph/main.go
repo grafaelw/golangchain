@@ -401,4 +401,64 @@ func main() {
 			fmt.Printf("Parallel result:\n%s\n", data)
 		}
 	}
+
+	// =========================================================================
+	// Edge interrupts — pause graph execution at a specific edge
+	// =========================================================================
+	section("Edge-Interrupt Demo  (pause before sensitive operation)")
+
+	type SimpleState struct {
+		Approved bool
+	}
+	simpleReducer := func(cur, upd SimpleState) SimpleState {
+		if upd.Approved {
+			cur.Approved = true
+		}
+		return cur
+	}
+
+	simpleGraph := graph.NewStateGraph(simpleReducer)
+	simpleGraph.MustAddNode("process", func(_ context.Context, s SimpleState) (SimpleState, error) {
+		fmt.Println("  → Processing...")
+		return s, nil
+	})
+	simpleGraph.MustAddNode("sensitive", func(_ context.Context, s SimpleState) (SimpleState, error) {
+		fmt.Println("  → Running sensitive operation (only after approval)")
+		return s, nil
+	})
+	simpleGraph.MustAddEdge(graph.START, "process")
+	simpleGraph.AddInterruptEdge("process", "sensitive") // pause here
+	simpleGraph.MustAddEdge("sensitive", graph.END)
+
+	cp := graph.NewMemoryCheckpointer[SimpleState]()
+	compiledSimple, _ := simpleGraph.Compile(graph.WithCheckpointer[SimpleState](cp))
+
+	// First run — pauses at the interrupt edge
+	_, err = compiledSimple.Invoke(ctx, SimpleState{}, graph.WithThreadID[SimpleState]("t1"))
+	if err != nil {
+		fmt.Printf("  Paused: %v\n", err)
+	}
+	// Resume — skips the interrupt edge
+	_, err = compiledSimple.Invoke(ctx, SimpleState{}, graph.WithThreadID[SimpleState]("t1"))
+	if err != nil {
+		fmt.Printf("  Error on resume: %v\n", err)
+	} else {
+		fmt.Println("  Resumed and completed successfully.")
+	}
+
+	// =========================================================================
+	// DOT export — graph visualisation for Graphviz
+	// =========================================================================
+	section("DOT Export  (Graphviz-compatible graph visualisation)")
+	dot := compiledSimple.ToDOT()
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Print(dot)
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Println("Render with: dot -Tpng graph.dot -o graph.png")
+}
+
+func section(title string) {
+	fmt.Fprintf(os.Stderr,
+		"\n\033[1;37m══════════════════════════════════════════\n  %s\n══════════════════════════════════════════\033[0m\n\n",
+		title)
 }

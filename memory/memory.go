@@ -614,3 +614,266 @@ func parseEntities(text string) map[string]string {
 	}
 	return result
 }
+
+// ---------------------------------------------------------------------------
+// ConversationKGMemory — knowledge-graph conversation memory
+// ---------------------------------------------------------------------------
+
+// ConversationKGMemory uses an LLM to extract entity-relationship triples
+// from each turn and maintains a knowledge graph of the conversation.
+// When loading, relevant triples are injected alongside recent messages.
+//
+//	mem := memory.NewConversationKGMemory(myLLM)
+type ConversationKGMemory struct {
+	mu         sync.Mutex
+	llm        llm.LLM
+	messages   []schema.Message
+	triples    []string // "Entity1 → RELATION → Entity2"
+	HistoryKey string
+	MaxRecent  int
+}
+
+// NewConversationKGMemory creates a knowledge-graph memory.
+func NewConversationKGMemory(model llm.LLM) *ConversationKGMemory {
+	return &ConversationKGMemory{
+		llm:        model,
+		HistoryKey: "history",
+		MaxRecent:  4,
+	}
+}
+
+func (m *ConversationKGMemory) Messages() []schema.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.buildMessages()
+}
+
+func (m *ConversationKGMemory) LoadMemoryVariables(_ context.Context) (map[string]any, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return map[string]any{m.HistoryKey: m.buildMessages()}, nil
+}
+
+func (m *ConversationKGMemory) buildMessages() []schema.Message {
+	var msgs []schema.Message
+	if len(m.triples) > 0 {
+		ctx := "Knowledge graph from conversation:\n" + strings.Join(m.triples, "\n")
+		msgs = append(msgs, schema.NewSystemMessage(ctx))
+	}
+	recent := m.recent()
+	msgs = append(msgs, recent...)
+	return msgs
+}
+
+func (m *ConversationKGMemory) recent() []schema.Message {
+	n := len(m.messages)
+	if m.MaxRecent > 0 {
+		start := n - m.MaxRecent*2
+		if start < 0 {
+			start = 0
+		}
+		cp := make([]schema.Message, n-start)
+		copy(cp, m.messages[start:])
+		return cp
+	}
+	cp := make([]schema.Message, n)
+	copy(cp, m.messages)
+	return cp
+}
+
+func (m *ConversationKGMemory) SaveContext(ctx context.Context, humanInput, aiOutput string) error {
+	m.mu.Lock()
+	m.messages = append(m.messages,
+		schema.NewHumanMessage(humanInput),
+		schema.NewAIMessage(aiOutput),
+	)
+	m.mu.Unlock()
+	return m.extractTriples(ctx, humanInput+"\n"+aiOutput)
+}
+
+func (m *ConversationKGMemory) Clear(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = nil
+	m.triples = nil
+	return nil
+}
+
+func (m *ConversationKGMemory) SaveMessages(ctx context.Context, msgs []schema.Message) error {
+	m.mu.Lock()
+	m.messages = append(m.messages, msgs...)
+	m.mu.Unlock()
+	var sb strings.Builder
+	for _, msg := range msgs {
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n")
+	}
+	return m.extractTriples(ctx, sb.String())
+}
+
+func (m *ConversationKGMemory) extractTriples(ctx context.Context, text string) error {
+	prompt := fmt.Sprintf(`Extract subject-relation-object triples from the text below.
+For each triple, use the format: Subject → RELATION → Object
+Return ONLY the triples, one per line. If no clear triples exist, respond "NONE".
+
+Text:
+%s`, text)
+
+	gen, err := m.llm.Generate(ctx, []schema.Message{
+		schema.NewHumanMessage(prompt),
+	})
+	if err != nil {
+		return fmt.Errorf("memory: kg extract: %w", err)
+	}
+
+	raw := strings.TrimSpace(gen.Text)
+	if raw == "" || raw == "NONE" {
+		return nil
+	}
+
+	lines := strings.Split(raw, "\n")
+	m.mu.Lock()
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && strings.Contains(line, "→") {
+			m.triples = append(m.triples, line)
+		}
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// Triples returns a copy of the knowledge-graph triples.
+func (m *ConversationKGMemory) Triples() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]string, len(m.triples))
+	copy(cp, m.triples)
+	return cp
+}
+
+// ---------------------------------------------------------------------------
+// CombinedMemory — composite memory
+// ---------------------------------------------------------------------------
+
+// CombinedMemory composites multiple Memory instances.
+// LoadMemoryVariables merges the variables from all memories.
+// SaveContext and SaveMessages propagate to all memories.
+//
+//	buf := memory.NewConversationBufferMemory()
+//	ent := memory.NewConversationEntityMemory(model)
+//	combined := memory.NewCombinedMemory(buf, ent)
+type CombinedMemory struct {
+	memories []Memory
+}
+
+// NewCombinedMemory creates a composite memory from multiple implementations.
+func NewCombinedMemory(memories ...Memory) *CombinedMemory {
+	return &CombinedMemory{memories: memories}
+}
+
+func (m *CombinedMemory) Messages() []schema.Message {
+	var all []schema.Message
+	for _, mem := range m.memories {
+		all = append(all, mem.Messages()...)
+	}
+	return all
+}
+
+func (m *CombinedMemory) LoadMemoryVariables(ctx context.Context) (map[string]any, error) {
+	result := make(map[string]any)
+	for _, mem := range m.memories {
+		vars, err := mem.LoadMemoryVariables(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range vars {
+			result[k] = v
+		}
+	}
+	return result, nil
+}
+
+func (m *CombinedMemory) SaveContext(ctx context.Context, humanInput, aiOutput string) error {
+	for _, mem := range m.memories {
+		if err := mem.SaveContext(ctx, humanInput, aiOutput); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *CombinedMemory) Clear(ctx context.Context) error {
+	for _, mem := range m.memories {
+		if err := mem.Clear(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *CombinedMemory) SaveMessages(ctx context.Context, msgs []schema.Message) error {
+	for _, mem := range m.memories {
+		if mm, ok := mem.(MessagesMemory); ok {
+			if err := mm.SaveMessages(ctx, msgs); err != nil {
+				return err
+			}
+			continue
+		}
+		var human, ai string
+		for _, msg := range msgs {
+			if msg.Role == schema.RoleHuman {
+				human = msg.Content
+			}
+			if msg.Role == schema.RoleAI {
+				ai = msg.Content
+			}
+		}
+		if err := mem.SaveContext(ctx, human, ai); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// ReadOnlySharedMemory — read-only wrapper
+// ---------------------------------------------------------------------------
+
+// ReadOnlySharedMemory wraps a Memory and prevents writes.
+// Use this in multi-agent setups where one agent shares another's context
+// but should not modify it.
+//
+//	master := memory.NewConversationBufferMemory()
+//	slave := memory.NewReadOnlySharedMemory(master)
+type ReadOnlySharedMemory struct {
+	inner Memory
+}
+
+// NewReadOnlySharedMemory creates a read-only wrapper around another Memory.
+func NewReadOnlySharedMemory(inner Memory) *ReadOnlySharedMemory {
+	return &ReadOnlySharedMemory{inner: inner}
+}
+
+func (m *ReadOnlySharedMemory) Messages() []schema.Message {
+	return m.inner.Messages()
+}
+
+func (m *ReadOnlySharedMemory) LoadMemoryVariables(ctx context.Context) (map[string]any, error) {
+	return m.inner.LoadMemoryVariables(ctx)
+}
+
+func (m *ReadOnlySharedMemory) SaveContext(_ context.Context, _, _ string) error {
+	return nil // silently discard writes
+}
+
+func (m *ReadOnlySharedMemory) Clear(_ context.Context) error {
+	return nil
+}
+
+func (m *ReadOnlySharedMemory) SaveMessages(_ context.Context, _ []schema.Message) error {
+	return nil
+}
+
+var _ MessagesMemory = (*CombinedMemory)(nil)
+var _ MessagesMemory = (*ReadOnlySharedMemory)(nil)

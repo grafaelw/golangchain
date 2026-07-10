@@ -11,14 +11,20 @@
 //
 // # Memory types
 //
-//   - [ConversationBufferMemory]  — stores the complete history, unbounded.
-//   - [ConversationWindowMemory]  — keeps only the last k turns; older
+//   - [ConversationBufferMemory]   — stores the complete history, unbounded.
+//   - [ConversationWindowMemory]   — keeps only the last k turns; older
 //     messages are dropped.
-//   - [ConversationSummaryMemory] — compresses old turns into a running
+//   - [ConversationSummaryMemory]  — compresses old turns into a running
 //     summary via an LLM call.
-//   - [FileChatHistory]           — ConversationBufferMemory backed by a JSON
+//   - [TokenBufferMemory]          — keeps history trimmed to a token budget.
+//   - [ConversationEntityMemory]   — extracts per-entity summaries via LLM.
+//   - [ConversationKGMemory]       — builds a knowledge graph of entities
+//     and relationships.
+//   - [CombinedMemory]             — composites multiple Memory instances.
+//   - [ReadOnlySharedMemory]       — read-only wrapper for multi-agent setups.
+//   - [FileChatHistory]            — ConversationBufferMemory backed by a JSON
 //     file on disk; suitable for CLI sessions and single-node apps.
-//   - [VectorStoreMemory]         — semantic long-term memory: every turn is
+//   - [VectorStoreMemory]          — semantic long-term memory: every turn is
 //     indexed in a vectorstore.VectorStore, and LoadMemoryVariables returns
 //     the top-K past turns most relevant to the last query.
 //

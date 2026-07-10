@@ -385,3 +385,77 @@ func TestSummaryMemory_LoadMemoryVariables(t *testing.T) {
 		t.Error("expected 'history' key")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ConversationKGMemory
+// ---------------------------------------------------------------------------
+
+func TestKGMemory_SaveAndLoad(t *testing.T) {
+	llm := &mockEntityLLM{response: "Alice → WORKS_FOR → Google\nBob → CREATED → Go"}
+	m := memory.NewConversationKGMemory(llm)
+	m.SaveContext(ctx, "Alice works at Google. Bob created Go.", "Interesting.")
+	vars, err := m.LoadMemoryVariables(ctx)
+	if err != nil {
+		t.Fatalf("LoadMemoryVariables: %v", err)
+	}
+	msgs := vars["history"].([]schema.Message)
+	if len(msgs) < 3 {
+		t.Errorf("want at least 3 messages, got %d", len(msgs))
+	}
+	if msgs[0].Role != schema.RoleSystem {
+		t.Errorf("want system role for KG context, got %q", msgs[0].Role)
+	}
+}
+
+func TestKGMemory_Clear(t *testing.T) {
+	llm := &mockEntityLLM{response: "A → B → C"}
+	m := memory.NewConversationKGMemory(llm)
+	m.SaveContext(ctx, "q", "a")
+	m.Clear(ctx)
+	if len(m.Triples()) != 0 {
+		t.Error("expected empty triples after clear")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CombinedMemory
+// ---------------------------------------------------------------------------
+
+func TestCombinedMemory(t *testing.T) {
+	buf1 := memory.NewConversationBufferMemory()
+	buf2 := memory.NewConversationBufferMemory()
+	buf1.HistoryKey = "chat1"
+	buf2.HistoryKey = "chat2"
+	buf1.SaveContext(ctx, "q1", "a1")
+	buf2.SaveContext(ctx, "q2", "a2")
+	combined := memory.NewCombinedMemory(buf1, buf2)
+	vars, err := combined.LoadMemoryVariables(ctx)
+	if err != nil {
+		t.Fatalf("LoadMemoryVariables: %v", err)
+	}
+	if _, ok := vars["chat1"]; !ok {
+		t.Error("missing chat1 key")
+	}
+	if _, ok := vars["chat2"]; !ok {
+		t.Error("missing chat2 key")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReadOnlySharedMemory
+// ---------------------------------------------------------------------------
+
+func TestReadOnlyMemory(t *testing.T) {
+	buf := memory.NewConversationBufferMemory()
+	buf.SaveContext(ctx, "q", "a")
+	ro := memory.NewReadOnlySharedMemory(buf)
+	ro.SaveContext(ctx, "new_q", "new_a")
+	vars, err := ro.LoadMemoryVariables(ctx)
+	if err != nil {
+		t.Fatalf("LoadMemoryVariables: %v", err)
+	}
+	msgs := vars["history"].([]schema.Message)
+	if len(msgs) != 2 {
+		t.Errorf("want 2 original messages, got %d", len(msgs))
+	}
+}

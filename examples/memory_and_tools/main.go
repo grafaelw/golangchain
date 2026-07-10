@@ -8,6 +8,8 @@
 //   - ConversationSummaryMemory — compresses old turns via an LLM call
 //   - TokenBufferMemory         — keeps history trimmed to a token budget
 //   - ConversationEntityMemory  — extracts per-entity summaries
+//   - CombinedMemory            — composites multiple Memory instances
+//   - ReadOnlySharedMemory      — read-only wrapper for multi-agent setups
 //   - Calculator                — recursive-descent arithmetic parser
 //   - FuncTool                  — wraps any function as a Tool
 //   - ToToolDefs / FindTool     — helpers for working with []Tool
@@ -229,6 +231,51 @@ func main() {
 	}
 	found := tools.FindTool(allTools, "calculator")
 	fmt.Printf("\nFindTool(\"calculator\") -> %s\n", found.Name())
+
+	// -------------------------------------------------------------------------
+	// 10. CombinedMemory — composite multiple memories
+	// -------------------------------------------------------------------------
+	fmt.Println("\n--- 10. CombinedMemory ---")
+	bufMem := memory.NewConversationBufferMemory()
+	bufMem.HistoryKey = "chat_history"
+	winMem := memory.NewConversationWindowMemory(2)
+	winMem.HistoryKey = "recent_history"
+
+	_ = bufMem.SaveContext(ctx, "Q1", "A1")
+	_ = winMem.SaveContext(ctx, "Q2", "A2")
+
+	combined := memory.NewCombinedMemory(bufMem, winMem)
+	vars, _ = combined.LoadMemoryVariables(ctx)
+	fmt.Printf("  Combined memory keys: %v\n", memKeys(vars))
+	for k, v := range vars {
+		switch val := v.(type) {
+		case []schema.Message:
+			fmt.Printf("  %s: %d messages\n", k, len(val))
+		case string:
+			fmt.Printf("  %s: %q\n", k, truncate(val, 40))
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// 11. ReadOnlySharedMemory — read-only wrapper
+	// -------------------------------------------------------------------------
+	fmt.Println("\n--- 11. ReadOnlySharedMemory ---")
+	masterMem := memory.NewConversationBufferMemory()
+	_ = masterMem.SaveContext(ctx, "master_q", "master_a")
+	roMem := memory.NewReadOnlySharedMemory(masterMem)
+	_ = roMem.SaveContext(ctx, "slave_q", "slave_a") // silently discarded
+
+	vars2, _ := roMem.LoadMemoryVariables(ctx)
+	roMsgs := vars2["history"].([]schema.Message)
+	fmt.Printf("  Slaves sees %d messages (writes silently discarded)\n", len(roMsgs))
+}
+
+func memKeys(m map[string]any) []string {
+	var k []string
+	for key := range m {
+		k = append(k, key)
+	}
+	return k
 }
 
 func truncate(s string, n int) string {

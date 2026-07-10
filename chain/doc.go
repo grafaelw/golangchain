@@ -18,15 +18,22 @@
 //
 // # Chain types
 //
-//   - [FuncRunnable]         — wraps any func(ctx, any) (any, error)
-//   - [LLMRunnable]          — wraps an llm.LLM for use inside a Pipe
-//   - [LLMChain]             — prompt → LLM → output parser (canonical chain)
-//   - [SequentialChain]      — threads output of step N as input to step N+1
-//   - [MapChain]             — fans input to multiple branches in parallel
-//   - [RouterChain]          — picks one sub-chain based on a routing function
-//   - [RetrievalQAChain]     — retrieval-augmented QA over a retriever.Retriever
-//   - [MapReduceSummarizer]  — parallel per-chunk summaries, then a reduce step
-//   - [RefineSummarizer]     — ordered, iterative refinement of a running summary
+//   - [FuncRunnable]               — wraps any func(ctx, any) (any, error)
+//   - [LLMRunnable]                — wraps an llm.LLM for use inside a Pipe
+//   - [LLMChain]                   — prompt → LLM → output parser (canonical chain)
+//   - [SequentialChain]            — threads output of step N as input to step N+1
+//   - [MapChain]                   — fans input to multiple branches in parallel
+//   - [RouterChain]                — picks one sub-chain based on a routing function
+//   - [FallbackChain]              — tries runnables in order until one succeeds
+//   - [LLMRouterChain]             — uses an LLM to classify input and pick a sub-chain
+//   - [LLMCheckerChain]            — generates then self-verifies the answer
+//   - [RetrievalQAChain]           — retrieval-augmented QA over a retriever.Retriever
+//   - [ConversationalRetrievalChain] — multi-turn RAG with chat history and question reformulation
+//   - [MapReduceSummarizer]        — parallel per-chunk summaries, then a reduce step
+//   - [RefineSummarizer]           — ordered, iterative refinement of a running summary
+//   - [QAGenerationChain]          — generates QA pairs from a document for eval datasets
+//   - [SQLDatabaseChain]           — NL → SQL query → execution → natural language answer
+//   - [APIChain]                   — NL → API call → natural language answer
 //
 // # LLMChain example
 //

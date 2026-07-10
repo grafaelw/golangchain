@@ -4,9 +4,13 @@
 package output
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/grafaelw/golangchain/llm"
+	"github.com/grafaelw/golangchain/schema"
 )
 
 // ---------------------------------------------------------------------------
@@ -175,6 +179,186 @@ func (BoolOutputParser) FormatInstructions() string {
 //	chain.NewLLMChain(prompt, model, output.AsAny(output.StrOutputParser{}))
 func AsAny[T any](p Parser[T]) interface{ Parse(string) (any, error) } {
 	return &anyParser[T]{inner: p}
+}
+
+// ---------------------------------------------------------------------------
+// RetryWithErrorOutputParser — re-prompts on parse failure
+// ---------------------------------------------------------------------------
+
+// RetryWithErrorOutputParser wraps a Parser[T] and retries with a corrected
+// prompt when parsing fails. The LLM receives the original response + parse
+// error and is asked to fix the output.
+//
+//	parser := output.NewRetryWithErrorOutputParser(
+//	    output.StrOutputParser{}, model, 3,
+//	)
+//	result, err := parser.Parse(ctx, rawOutput, originalPrompt)
+type RetryWithErrorOutputParser[T any] struct {
+	inner    Parser[T]
+	llm      OutputLLM
+	maxRetry int
+}
+
+// OutputLLM is a minimal interface for output retry.
+type OutputLLM interface {
+	Generate(ctx context.Context, msgs []schema.Message, opts ...llm.Option) (*schema.Generation, error)
+}
+
+// NewRetryWithErrorOutputParser wraps a parser with LLM-based retry.
+// maxRetry is the maximum number of correction attempts (default 1 if <= 0).
+func NewRetryWithErrorOutputParser[T any](inner Parser[T], model OutputLLM, maxRetry int) *RetryWithErrorOutputParser[T] {
+	if maxRetry <= 0 {
+		maxRetry = 1
+	}
+	return &RetryWithErrorOutputParser[T]{inner: inner, llm: model, maxRetry: maxRetry}
+}
+
+// ParseContext parses with context-aware retry.
+func (p *RetryWithErrorOutputParser[T]) ParseContext(ctx context.Context, rawOutput string, originalPrompt string) (T, error) {
+	var zero T
+	result, err := p.inner.Parse(rawOutput)
+	if err == nil {
+		return result, nil
+	}
+
+	lastOutput := rawOutput
+	lastErr := err
+	for i := 0; i < p.maxRetry; i++ {
+		fixPrompt := fmt.Sprintf(`The following output failed to parse with error: %v
+
+Original prompt: %s
+
+Bad output:
+%s
+
+Please fix the output so it is valid and matches the expected format. Return ONLY the corrected output, nothing else.`, lastErr, originalPrompt, lastOutput)
+
+		gen, genErr := p.llm.Generate(ctx, []schema.Message{schema.NewHumanMessage(fixPrompt)})
+		if genErr != nil {
+			return zero, fmt.Errorf("output: retry generate: %w", genErr)
+		}
+
+		result, err = p.inner.Parse(gen.Text)
+		if err == nil {
+			return result, nil
+		}
+		lastOutput = gen.Text
+		lastErr = err
+	}
+
+	return zero, fmt.Errorf("output: parse failed after %d retries: %w", p.maxRetry, lastErr)
+}
+
+func (p *RetryWithErrorOutputParser[T]) Parse(text string) (T, error) {
+	return p.inner.Parse(text)
+}
+
+func (p *RetryWithErrorOutputParser[T]) FormatInstructions() string {
+	return p.inner.FormatInstructions()
+}
+
+// ---------------------------------------------------------------------------
+// XMLOutputParser — parses LLM output as XML
+// ---------------------------------------------------------------------------
+
+// XMLOutputParser parses the LLM output as XML and returns a structured
+// representation. It uses Go's encoding/xml for parsing.
+type XMLOutputParser struct{}
+
+// XMLOutput represents a parsed XML document as nested maps.
+type XMLOutput struct {
+	Data map[string]any
+}
+
+func (XMLOutputParser) Parse(text string) (*XMLOutput, error) {
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(text, "```xml")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	result := &XMLOutput{Data: make(map[string]any)}
+	if err := parseXMLSimple(text, "", result.Data); err != nil {
+		return nil, fmt.Errorf("output: XML parse: %w", err)
+	}
+	return result, nil
+}
+
+func (XMLOutputParser) FormatInstructions() string {
+	return "Respond with valid XML only. Do not include markdown code fences unless wrapping XML."
+}
+
+// parseXMLSimple is a lightweight XML parser that builds a nested map.
+func parseXMLSimple(xml, root string, dest map[string]any) error {
+	i := 0
+	for i < len(xml) {
+		// Skip whitespace and non-tag content
+		if xml[i] != '<' {
+			i++
+			continue
+		}
+		end := strings.IndexByte(xml[i:], '>')
+		if end < 0 {
+			break
+		}
+		tag := xml[i+1 : i+end]
+		i += end + 1
+
+		// Closing tag
+		if strings.HasPrefix(tag, "/") {
+			return nil
+		}
+
+		// Self-closing tag
+		selfClosing := strings.HasSuffix(tag, "/")
+		if selfClosing {
+			tag = tag[:len(tag)-1]
+		}
+
+		// Extract tag name (ignore attributes)
+		tagName := strings.SplitN(tag, " ", 2)[0]
+
+		// Find closing tag
+		if !selfClosing {
+			closingTag := "</" + tagName + ">"
+			closing := strings.Index(xml[i:], closingTag)
+			if closing >= 0 {
+				inner := xml[i : i+closing]
+				child := make(map[string]any)
+				if err := parseXMLSimple(inner, tagName, child); err != nil {
+					return err
+				}
+				if existing, ok := dest[tagName]; ok {
+					switch v := existing.(type) {
+					case []any:
+						dest[tagName] = append(v, child)
+					default:
+						dest[tagName] = []any{v, child}
+					}
+				} else {
+					dest[tagName] = child
+				}
+				i += closing + len(closingTag)
+				continue
+			}
+		}
+
+		// Self-closing or no children found — treat as string value if there's text content
+		if !selfClosing {
+			closingTag := "</" + tagName + ">"
+			if closing := strings.Index(xml[i:], closingTag); closing >= 0 {
+				value := strings.TrimSpace(xml[i : i+closing])
+				if dest[tagName] == nil {
+					dest[tagName] = value
+				}
+				i += closing + len(closingTag)
+				continue
+			}
+		}
+		dest[tagName] = ""
+	}
+
+	return nil
 }
 
 type anyParser[T any] struct{ inner Parser[T] }

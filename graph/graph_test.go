@@ -3,6 +3,7 @@ package graph_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -570,5 +571,89 @@ func TestConditionalEdge_MissingKey_NoWildcard(t *testing.T) {
 	_, err := compiled.Invoke(context.Background(), testState{})
 	if err == nil {
 		t.Error("expected error for unknown routing key without wildcard")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DOT export
+// ---------------------------------------------------------------------------
+
+func TestToDOT_StateGraph(t *testing.T) {
+	g := graph.NewStateGraph(reducer).WithName("TestGraph")
+	g.MustAddNode("a", func(_ context.Context, s testState) (testState, error) { return s, nil })
+	g.MustAddNode("b", func(_ context.Context, s testState) (testState, error) { return s, nil })
+	g.AddEdge(graph.START, "a")
+	g.AddEdge("a", "b")
+	g.AddEdge("b", graph.END)
+
+	dot := g.ToDOT()
+	if !strings.Contains(dot, "TestGraph") {
+		t.Error("DOT output should contain graph name")
+	}
+	if !strings.Contains(dot, "START") || !strings.Contains(dot, "END") {
+		t.Error("DOT output should contain START/END nodes")
+	}
+	if !strings.Contains(dot, "\"a\"") || !strings.Contains(dot, "\"b\"") {
+		t.Error("DOT output should contain node names")
+	}
+}
+
+func TestToDOT_CompiledGraph(t *testing.T) {
+	g := graph.NewStateGraph(reducer)
+	g.MustAddNode("x", func(_ context.Context, s testState) (testState, error) { return s, nil })
+	g.AddEdge(graph.START, "x")
+	g.AddEdge("x", graph.END)
+	compiled, _ := g.Compile()
+
+	dot := compiled.ToDOT()
+	if !strings.Contains(dot, "digraph") {
+		t.Error("DOT output should be a digraph")
+	}
+}
+
+func TestToDOT_InterruptEdge(t *testing.T) {
+	g := graph.NewStateGraph(reducer)
+	g.MustAddNode("n", func(_ context.Context, s testState) (testState, error) { return s, nil })
+	g.AddEdge(graph.START, "n")
+	g.AddInterruptEdge("n", graph.END)
+
+	dot := g.ToDOT()
+	if !strings.Contains(dot, "dashed") {
+		t.Error("DOT should mark interrupt edges with dashed style")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Edge interrupts
+// ---------------------------------------------------------------------------
+
+func TestEdgeInterrupt_Pauses(t *testing.T) {
+	g := graph.NewStateGraph(reducer)
+	var ran atomic.Int32
+	g.MustAddNode("work", func(_ context.Context, s testState) (testState, error) {
+		ran.Add(1)
+		return testState{Log: []string{"work-done"}}, nil
+	})
+	g.AddEdge(graph.START, "work")
+	g.AddInterruptEdge("work", graph.END)
+
+	cp := graph.NewMemoryCheckpointer[testState]()
+	compiled, _ := g.Compile(graph.WithCheckpointer[testState](cp))
+
+	_, err := compiled.Invoke(context.Background(), testState{}, graph.WithThreadID[testState]("edge-int"))
+	if err == nil {
+		t.Fatal("expected interrupt error")
+	}
+	if _, ok := err.(*graph.Interrupt); !ok {
+		t.Fatalf("expected *graph.Interrupt, got %T: %v", err, err)
+	}
+	if ran.Load() != 1 {
+		t.Error("node should have executed before interrupt")
+	}
+
+	// Resume — should skip the edge interrupt and finish
+	_, err = compiled.Invoke(context.Background(), testState{}, graph.WithThreadID[testState]("edge-int"))
+	if err != nil {
+		t.Fatalf("expected no error after resume, got %v", err)
 	}
 }

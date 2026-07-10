@@ -101,6 +101,7 @@ type edge[S any] struct {
 	condition ConditionFunc[S]  // for conditional
 	mapping   map[string]string // for conditional: route key → node name
 	branches  []string          // for parallel
+	interrupt bool              // pause before traversing this edge
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +221,16 @@ func (g *StateGraph[S]) MustAddSubgraph(name string, subgraph *CompiledGraph[S])
 	if err := g.AddSubgraph(name, subgraph); err != nil {
 		panic(err)
 	}
+}
+
+// AddInterruptEdge marks an unconditional edge as an interrupt point.
+// Execution pauses before traversing this edge, saving a checkpoint.
+// The next invocation (with the same thread ID) resumes from this point.
+//
+//	g.AddInterruptEdge("agent", "approval_required") // pause before approval
+func (g *StateGraph[S]) AddInterruptEdge(from, to string) {
+	e := edge[S]{kind: edgeUnconditional, to: to, interrupt: true}
+	g.edges[from] = append(g.edges[from], e)
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +356,8 @@ type CompiledGraph[S any] struct {
 type RunOption[S any] func(*runConfig[S])
 
 type runConfig[S any] struct {
-	threadID string
+	threadID                 string
+	resumeAfterEdgeInterrupt bool // true when resuming from an edge interrupt
 }
 
 // WithThreadID associates a thread ID with this run for checkpointing.
@@ -437,16 +449,21 @@ func (c *CompiledGraph[S]) stream(ctx context.Context, input S, rc *runConfig[S]
 
 		state := input
 
+		// Queue of node names to execute next
+		queue := []string{START}
+
 		// Load checkpoint if threadID provided and checkpointer available
 		if rc.threadID != "" && c.cfg.checkpointer != nil {
 			cp, err := c.cfg.checkpointer.Load(ctx, rc.threadID)
 			if err == nil && cp != nil {
 				state = cp.State
+				if cp.InterruptedNode != "" {
+					queue = []string{cp.InterruptedNode}
+					rc.resumeAfterEdgeInterrupt = true
+				}
 			}
 		}
 
-		// Queue of node names to execute next
-		queue := []string{START}
 		steps := 0
 
 		for len(queue) > 0 {
@@ -537,6 +554,14 @@ func (c *CompiledGraph[S]) stream(ctx context.Context, input S, rc *runConfig[S]
 				return
 			}
 
+			// Edge-level interrupt: pause before following an interrupt edge.
+			// Skip if we just resumed from this node.
+			if !rc.resumeAfterEdgeInterrupt && c.hasInterruptEdge(nodeName) {
+				c.saveInterruptedCheckpoint(ctx, rc, state, nodeName, ch)
+				ch <- GraphEvent[S]{Type: GraphEventError, Err: NewInterrupt("graph: paused at edge from " + nodeName)}
+				return
+			}
+
 			// Handle parallel branches with goroutines
 			if len(nextNodes) > 1 {
 				mergedState, err := c.runParallel(ctx, nextNodes, state, rc, steps)
@@ -558,6 +583,17 @@ func (c *CompiledGraph[S]) stream(ctx context.Context, input S, rc *runConfig[S]
 	}()
 
 	return ch
+}
+
+// hasInterruptEdge returns true if any outgoing edge from the given node
+// is marked as an interrupt point.
+func (c *CompiledGraph[S]) hasInterruptEdge(from string) bool {
+	for _, e := range c.edges[from] {
+		if e.interrupt {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveEdges computes the list of next node names from the current node.
@@ -684,16 +720,35 @@ func (c *CompiledGraph[S]) saveCheckpoint(ctx context.Context, rc *runConfig[S],
 	}
 }
 
+func (c *CompiledGraph[S]) saveInterruptedCheckpoint(ctx context.Context, rc *runConfig[S], state S, interruptedNode string, ch chan<- GraphEvent[S]) {
+	if rc.threadID == "" || c.cfg.checkpointer == nil {
+		return
+	}
+	cp := Checkpoint[S]{
+		ThreadID:        rc.threadID,
+		State:           state,
+		CreatedAt:       time.Now(),
+		InterruptedNode: interruptedNode,
+	}
+	if err := c.cfg.checkpointer.Save(ctx, rc.threadID, cp); err == nil {
+		if c.cfg.callbacks != nil {
+			c.cfg.callbacks.OnGraphCheckpoint(ctx, c.name, rc.threadID)
+		}
+		ch <- GraphEvent[S]{Type: GraphEventCheckpoint, State: state}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Checkpointer interface
 // ---------------------------------------------------------------------------
 
 // Checkpoint holds a serialisable snapshot of graph state at a point in time.
 type Checkpoint[S any] struct {
-	ThreadID  string    `json:"thread_id"`
-	State     S         `json:"state"`
-	CreatedAt time.Time `json:"created_at"`
-	StepCount int       `json:"step_count,omitempty"`
+	ThreadID        string    `json:"thread_id"`
+	State           S         `json:"state"`
+	CreatedAt       time.Time `json:"created_at"`
+	StepCount       int       `json:"step_count,omitempty"`
+	InterruptedNode string    `json:"interrupted_node,omitempty"`
 }
 
 // Checkpointer persists and retrieves graph checkpoints.
