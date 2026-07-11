@@ -132,7 +132,7 @@ func (c *APIChain) callAPI(ctx context.Context, url, method string, headers map[
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 100*1024))
 	if err != nil {
 		return "", err

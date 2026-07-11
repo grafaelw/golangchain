@@ -27,7 +27,7 @@ func (g *StateGraph[S]) ToDOT() string {
 	// Nodes
 	for name := range g.nodes {
 		label := escapeDOT(name)
-		sb.WriteString(fmt.Sprintf("  %q [label=%q];\n", name, label))
+		fmt.Fprintf(&sb, "  %q [label=%q];\n", name, label)
 	}
 	sb.WriteString("\n")
 
@@ -40,15 +40,15 @@ func (g *StateGraph[S]) ToDOT() string {
 			}
 			switch e.kind {
 			case edgeUnconditional:
-				sb.WriteString(fmt.Sprintf("  %q -> %q%s;\n", from, e.to, attrs))
+				fmt.Fprintf(&sb, "  %q -> %q%s;\n", from, e.to, attrs)
 			case edgeParallel:
 				for _, branch := range e.branches {
-					sb.WriteString(fmt.Sprintf("  %q -> %q [color=blue, label=\"∥\"];\n", from, branch))
+					fmt.Fprintf(&sb, "  %q -> %q [color=blue, label=\"∥\"];\n", from, branch)
 				}
 			case edgeConditional:
 				for key, to := range e.mapping {
 					label := escapeDOT(key)
-					sb.WriteString(fmt.Sprintf("  %q -> %q [label=%q];\n", from, to, label))
+					fmt.Fprintf(&sb, "  %q -> %q [label=%q];\n", from, to, label)
 				}
 			}
 		}
@@ -74,7 +74,7 @@ func (c *CompiledGraph[S]) ToDOT() string {
 
 	for name := range c.nodes {
 		label := escapeDOT(name)
-		sb.WriteString(fmt.Sprintf("  %q [label=%q];\n", name, label))
+		fmt.Fprintf(&sb, "  %q [label=%q];\n", name, label)
 	}
 	sb.WriteString("\n")
 
@@ -86,15 +86,15 @@ func (c *CompiledGraph[S]) ToDOT() string {
 			}
 			switch e.kind {
 			case edgeUnconditional:
-				sb.WriteString(fmt.Sprintf("  %q -> %q%s;\n", from, e.to, attrs))
+				fmt.Fprintf(&sb, "  %q -> %q%s;\n", from, e.to, attrs)
 			case edgeParallel:
 				for _, branch := range e.branches {
-					sb.WriteString(fmt.Sprintf("  %q -> %q [color=blue, label=\"∥\"];\n", from, branch))
+					fmt.Fprintf(&sb, "  %q -> %q [color=blue, label=\"∥\"];\n", from, branch)
 				}
 			case edgeConditional:
 				for key, to := range e.mapping {
 					label := escapeDOT(key)
-					sb.WriteString(fmt.Sprintf("  %q -> %q [label=%q];\n", from, to, label))
+					fmt.Fprintf(&sb, "  %q -> %q [label=%q];\n", from, to, label)
 				}
 			}
 		}

@@ -120,7 +120,7 @@ type ToolCall struct {
 	ID               string          `json:"id"`
 	Type             string          `json:"type"` // always "function" for now
 	Name             string          `json:"name"`
-	Arguments        json.RawMessage `json:"arguments"` // JSON-encoded arguments
+	Arguments        json.RawMessage `json:"arguments"`                   // JSON-encoded arguments
 	ThoughtSignature []byte          `json:"thought_signature,omitempty"` // Gemini: opaque signature required when replaying function call parts
 }
 

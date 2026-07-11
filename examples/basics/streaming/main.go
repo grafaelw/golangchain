@@ -5,18 +5,22 @@
 // without the boilerplate of an LLM round-trip.
 //
 // Highlights:
+//
 //   - FuncRunnable.Stream() populates StreamChunk.Value with the concrete Go
 //     type produced by the function.
+//
 //   - Piped runnables receive StreamChunk.Value and can transform it, keeping
 //     the chain type-safe end to end.
+//
 //   - LLMChain.Stream() automatically sets StreamChunk.Value = chunk.Text so
 //     downstream consumers work identically regardless of whether the
 //     producer is an LLM or a pure-Go function.
+//
 //   - The streaming contract is explicit: if a runnable does not support
 //     streaming it must return an error (see MapChain).
 //
-//	Run this example with:
-//	  go run ./examples/basics/streaming
+//     Run this example with:
+//     go run ./examples/basics/streaming
 package main
 
 import (

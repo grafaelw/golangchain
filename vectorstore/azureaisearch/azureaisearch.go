@@ -134,8 +134,8 @@ func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document) error 
 		Metadata      map[string]any `json:"metadata,omitempty"`
 	}
 	type indexAction struct {
-		Action    string    `json:"action"`
-		Doc       docAction `json:"doc"`
+		Action string    `json:"action"`
+		Doc    docAction `json:"doc"`
 	}
 
 	actions := make([]indexAction, len(docs))
@@ -191,9 +191,9 @@ func (s *Store) SimilaritySearchByVector(ctx context.Context, vector []float64, 
 		"search": "*",
 		"vectorQueries": []map[string]any{
 			{
-				"kind":  "vector",
+				"kind":   "vector",
 				"vector": vector,
-				"k":     k,
+				"k":      k,
 				"fields": "contentVector",
 			},
 		},
