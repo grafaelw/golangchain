@@ -349,9 +349,10 @@ func (e *AgentExecutor) streamInternal(ctx context.Context, input string) <-chan
 						Role:    schema.RoleAI,
 						Content: action.Log,
 						ToolCalls: []schema.ToolCall{{
-							ID:        tcID,
-							Name:      action.Tool,
-							Arguments: json.RawMessage(action.ToolInput),
+							ID:               tcID,
+							Name:             action.Tool,
+							Arguments:        json.RawMessage(action.ToolInput),
+							ThoughtSignature: action.ThoughtSignature,
 						}},
 					},
 					schema.NewToolMessage(observation, tcID, action.Tool),
@@ -491,9 +492,10 @@ func (a *ToolCallingAgent) Plan(ctx context.Context, messages []schema.Message, 
 		var actions []schema.AgentAction
 		for _, tc := range gen.Message.ToolCalls {
 			actions = append(actions, schema.AgentAction{
-				Tool:      tc.Name,
-				ToolInput: string(tc.Arguments),
-				Log:       gen.Message.Content,
+				Tool:             tc.Name,
+				ToolInput:        string(tc.Arguments),
+				Log:              gen.Message.Content,
+				ThoughtSignature: tc.ThoughtSignature,
 			})
 		}
 		return actions, nil, nil

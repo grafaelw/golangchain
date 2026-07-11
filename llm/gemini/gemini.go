@@ -208,7 +208,11 @@ func buildAIParts(m schema.Message) []*genai.Part {
 		parts = append(parts, genai.NewPartFromText(m.Content))
 	}
 	for _, tc := range m.ToolCalls {
-		parts = append(parts, genai.NewPartFromFunctionCall(tc.Name, parseToolArgs(tc.Arguments)))
+		p := genai.NewPartFromFunctionCall(tc.Name, parseToolArgs(tc.Arguments))
+		if len(tc.ThoughtSignature) > 0 {
+			p.ThoughtSignature = tc.ThoughtSignature
+		}
+		parts = append(parts, p)
 	}
 	return parts
 }
@@ -252,9 +256,10 @@ func extractGeminiContent(resp *genai.GenerateContentResponse) (string, []schema
 			if part.FunctionCall != nil {
 				args, _ := json.Marshal(part.FunctionCall.Args)
 				toolCalls = append(toolCalls, schema.ToolCall{
-					ID:        part.FunctionCall.ID,
-					Name:      part.FunctionCall.Name,
-					Arguments: args,
+					ID:               part.FunctionCall.ID,
+					Name:             part.FunctionCall.Name,
+					Arguments:        args,
+					ThoughtSignature: part.ThoughtSignature,
 				})
 			}
 		}

@@ -17,6 +17,11 @@
 //   - [FileVectorStore]     — InMemoryVectorStore backed by a JSON file on
 //     disk; AddDocuments and Delete auto-persist. Cached vectors are reloaded
 //     on open, avoiding a re-embed on restart.
+//   - [azureaisearch]       — Azure AI Search (REST API).
+//   - [chroma]              — Chroma (REST API).
+//   - [pgvector]            — PostgreSQL pgvector.
+//   - [pinecone]            — Pinecone serverless (REST API).
+//   - [qdrant]              — Qdrant (REST API).
 //
 // # RetrieverTool
 //

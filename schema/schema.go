@@ -117,10 +117,11 @@ func (m Message) String() string {
 
 // ToolCall represents a request from the model to invoke a tool.
 type ToolCall struct {
-	ID        string          `json:"id"`
-	Type      string          `json:"type"` // always "function" for now
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"` // JSON-encoded arguments
+	ID               string          `json:"id"`
+	Type             string          `json:"type"` // always "function" for now
+	Name             string          `json:"name"`
+	Arguments        json.RawMessage `json:"arguments"` // JSON-encoded arguments
+	ThoughtSignature []byte          `json:"thought_signature,omitempty"` // Gemini: opaque signature required when replaying function call parts
 }
 
 // String returns a compact tool call representation.
@@ -283,9 +284,10 @@ func (d Document) String() string {
 
 // AgentAction represents a decision by the agent to invoke a tool.
 type AgentAction struct {
-	Tool      string `json:"tool"`
-	ToolInput string `json:"tool_input"`
-	Log       string `json:"log"`
+	Tool             string `json:"tool"`
+	ToolInput        string `json:"tool_input"`
+	Log              string `json:"log"`
+	ThoughtSignature []byte `json:"thought_signature,omitempty"` // Gemini: required when replaying function call parts
 }
 
 // String returns "tool(input)".
